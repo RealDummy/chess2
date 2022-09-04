@@ -1,6 +1,6 @@
 use crate::chess::bit_set::Set;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 
 pub enum Player {
     White = 0,
@@ -20,7 +20,7 @@ impl Player {
         [Player::White, Player::Black].iter().copied()
     }
 }
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Piece {
     Pawn,
     Knight,

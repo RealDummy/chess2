@@ -1,5 +1,6 @@
 use crate::chess::piece::Piece;
 
+#[derive(Debug)]
 pub enum MoveType {
     Quiet,
     Check,
@@ -9,15 +10,16 @@ pub enum MoveType {
     Promotion(Piece),
 }
 
+#[derive(Debug)]
 pub struct MoveSquares {
     pub from: u8,
     pub to: u8,
     pub promote: Option<Piece>,
 }
-
+#[derive(Debug)]
 pub struct Move {
-    from: u8,
-    to: u8,
-    move_type: MoveType
+    pub from: u8,
+    pub to: u8,
+    pub move_type: MoveType
 }
 

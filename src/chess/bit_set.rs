@@ -32,6 +32,18 @@ pub fn unset<N: Into<u64>>( a: &mut Set, idx: N) {
     *a = *a & !(1 << idx.into())
 }
 
+pub fn clear_lsb(a: &mut Set) {
+    *a = *a & (a.wrapping_sub(1))
+}
+
+pub fn lsb(a: Set) -> Set {
+    a & (!a).wrapping_add(1)
+}
+
+pub fn lsb_pos(a: Set) -> usize {
+    a.trailing_zeros() as usize
+}
+
 pub fn show(a: Set) {
     println!("{}", a);
     println!("{}  ┏━━━━━━━━━━━━━━━━━━━━━━━━┓", color::Fg(color::White));
@@ -66,4 +78,16 @@ pub fn show(a: Set) {
     }
     println!("  ┗━━━━━━━━━━━━━━━━━━━━━━━━┛");
     println!("    A  B  C  D  E  F  G  H ");
+}
+
+#[cfg(test)]
+mod test {
+
+    #[test]
+    fn bit_twiddle() {
+        assert!(super::lsb(15) == 1);
+        let mut x = 15;
+        super::clear_lsb(&mut x);
+        assert!(x == 14);
+    }
 }

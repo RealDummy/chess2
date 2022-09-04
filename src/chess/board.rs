@@ -1,10 +1,10 @@
-
+use std::vec::Vec;
 
 use super::input;
 use crate::chess::piece::{Piece, BLACK_START, WHITE_START, Player};
 use crate::chess::bit_set;
-pub use super::moves::MoveSquares;
-use super::generator::PossibleMoveGenerator;
+pub use super::moves::{Move, MoveType, MoveSquares};
+use super::generator::{PossibleMoveGenerator, SliderMasks};
 use bit_set::Set;
 use termion::{color};
 
@@ -35,13 +35,14 @@ pub fn adjust_square_checked<N: TryInto<i32> + Into<usize> + TryFrom<usize> + st
 }
 
 pub struct Board {
-    pub pieces: [[Set;6]; 2],
-    pub mailbox: Mailbox,
+    active: Player,
+    pieces: [[Set;6]; 2],
+    mailbox: Mailbox,
 
 }
 
-pub struct Mailbox {
-    squares: [Option<(Player, Piece)>; 64]
+struct Mailbox {
+    squares: [Option<(Player, Piece)>; 65]
 }
 
 impl Board {
@@ -49,6 +50,7 @@ impl Board {
         let pieces = [WHITE_START.clone(), BLACK_START.clone()];
         Board {
             pieces,
+            active: Player::White,
             mailbox: Mailbox::from(pieces),
         }
     }
@@ -58,6 +60,9 @@ impl Board {
     fn get_set_mut<'a>(&'a mut self, player: Player, piece: Piece) -> &'a mut Set{
         &mut self.pieces[player.index()][piece.index()]
     }
+    // pub fn iter_pieces<'a>(&'a self) -> MailboxIter<'a> {
+    //     self.mailbox.iter()
+    // }
     fn draw_board(buffer: &[char; 64], player: Player) {
         println!("{}  ┏━━━━━━━━━━━━━━━━━━━━━━━━┓", color::Fg(color::White));
         let square_iter  = match player {
@@ -92,13 +97,12 @@ impl Board {
         println!("  ┗━━━━━━━━━━━━━━━━━━━━━━━━┛");
         println!("    A  B  C  D  E  F  G  H ");
     }
-    pub fn show(&self, player: Player) {
+    pub fn show(&self) {
         let mut buffer = [' '; 64];
         for (player, piece, square) in self.mailbox.iter() {  
-            println!("{}", square); 
             buffer[square] = piece.get_char(player);
         }
-        Board::draw_board(&buffer, player);
+        Board::draw_board(&buffer, self.active);
     }
     pub fn force_move(&mut self, m: MoveSquares, gen: &PossibleMoveGenerator) -> bool {
         let (player, piece) = match self.mailbox.get(m.from) {
@@ -115,11 +119,44 @@ impl Board {
         let captured = self.mailbox.force_move(m);
         true
     }
+    pub fn generate_psudolegal(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
+        let mut res: Vec<Move> =vec![];
+        let friends = self.pieces[self.active.index()].iter().fold(0,|a,&x| bit_set::union(a, x));
+        let enemies = self.pieces[self.active.invert().index()].iter().fold(0,|a,&x| bit_set::union(a, x));
+        let all_pieces = bit_set::union(friends, enemies);
+        for (_, piece, square) in self.mailbox.iter().filter(|(p,_,_)| *p == self.active) {
+            let attacks = gen.get_attacks(self.active, piece, square);
+            let moves = gen.get_moves(self.active, piece, square);
+            let mut all_moves = bit_set::union(attacks, moves);
+            while all_moves != 0 {
+                let new_square = bit_set::lsb_pos(all_moves);
+                bit_set::clear_lsb(&mut all_moves);
+                let nss = 1u64 << new_square;
+                if bit_set::intersect(friends, nss) != 0 {
+                    continue;
+                }
+                let s = slide.get(square, new_square);
+                //bit_set::show(s);
+                if bit_set::intersect(s, all_pieces) != 0 {
+                    continue;
+                }
+                let is_capture = bit_set::intersect(enemies, nss);
+                res.push(
+                    match self.mailbox.get(bit_set::lsb_pos(is_capture)) {
+                        Some((_, piece)) => Move{from:square as u8, to: new_square as u8, move_type: MoveType::Capture(piece)},
+                        None => Move { from: square as u8, to: new_square as u8, move_type: MoveType::Quiet }
+                    }
+                )
+            }
+        }
+        res
+    }
     pub fn shitty_play(&mut self) {
         let gen = PossibleMoveGenerator::new();
-        let mut player = Player::White;
+        let slide = SliderMasks::new();
         loop {
-            self.show(player);
+            self.show();
+            let psudo_moves = self.generate_psudolegal(&gen, &slide);
             loop {
                 let s = input::get_input();
                 let m = match input::read_uci(&s) {
@@ -129,17 +166,21 @@ impl Board {
                     }
                     Ok(m) => m,
                 };
-                let friends = self.pieces[player.index()].iter().fold(0, |a,&x| bit_set::union(a, x));
-                let enemies = self.pieces[player.invert().index()].iter().fold(0, |a,&x| bit_set::union(a, x));
-                if bit_set::get(friends, m.to) != 0 {
-                    println!("Invalid Move");
-                    continue;
+                match psudo_moves.iter().find(|&target| {
+                    target.to == m.to && target.from == m.from
+                } ) {
+                    Some(_) => {
+                        if self.force_move(m, &gen) == false {
+                            println!("Invalid Move (IDFK bro)");
+                            continue;
+                        }
+
+                        println!("{:?}", psudo_moves);
+                    }
+                    None => {println!("Invalid Move (not in psuedolegal moves)"); continue;}
                 }
-                if self.force_move(m, &gen) == false {
-                    println!("Invalid Move");
-                    continue;
-                }
-                player = player.invert();
+    
+                self.active = self.active.invert();
                 break;
             }
             
@@ -150,7 +191,7 @@ impl Board {
 impl Mailbox {
     pub fn new() -> Self {
         Self {
-            squares: [None; 64]
+            squares: [None; 65]
         }
     }
 
@@ -190,7 +231,7 @@ impl Mailbox {
 
 pub struct MailboxIter<'a> {
     curr: usize,
-    arr: &'a [Option<(Player,Piece)>; 64],
+    arr: &'a [Option<(Player,Piece)>; 65],
 }
 
 impl<'a> Iterator for MailboxIter<'a> {
