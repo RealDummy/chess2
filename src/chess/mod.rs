@@ -4,3 +4,4 @@ pub mod board;
 pub mod piece;
 pub mod input;
 pub mod generator;
+pub mod validator;
