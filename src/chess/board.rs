@@ -135,6 +135,7 @@ impl Board {
         }
         true
     }
+
     pub fn generate_psudolegal(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
         let mut res: Vec<Move> =vec![];
         let opp = self.active.invert(); 
@@ -145,41 +146,29 @@ impl Board {
         let all_pieces = bit_set::union(friends, enemies);
         let king_pos = bit_set::lsb_pos(self.get_set(self.active, Piece::King));
 
-        let king_bishop_check = gen.get_attacks(
-            &SpecefiedPiece { 
-                player: self.active, 
-                piece: Piece::Bishop, 
-                square: king_pos 
-            }
-        );
-        let king_rook_check = gen.get_attacks(
-            &SpecefiedPiece { 
-                player: self.active, 
-                piece: Piece::Bishop, 
-                square: king_pos 
-            }
-        );
-        let king_queen_check = bit_set::union(king_bishop_check, king_rook_check);
+        let mut king_attackers:Set = 0;
+        for piece in Piece::iter() {
+            let king_piece_check = gen.get_attacks(
+                &SpecefiedPiece { 
+                    player: self.active, //only matters for pawns, where the king should be attacking like a pawn in order to find enemy pawn that are attacking him
+                    piece, 
+                    square: king_pos 
+                }
+            );
+            let attackers = bit_set::intersect(self.get_set(opp, piece), king_piece_check);
+            king_attackers = bit_set::union(king_attackers, attackers);
+        }
 
-
-        let bishop_pinners = bit_set::intersect(king_bishop_check, self.get_set(opp, Piece::Bishop));
-        let rook_pinners = bit_set::intersect(king_rook_check, self.get_set(opp, Piece::Rook));
-        let queen_pinners = bit_set::intersect(king_queen_check, self.get_set(opp, Piece::Queen));
-
-        let pinners = bit_set::union(queen_pinners, bit_set::union(bishop_pinners, rook_pinners));
-
-        let mut p = pinners;
+        let mut p = king_attackers;
         let mut pinned:Set = 0;
         let mut check:Set = 0;
         while p != 0 {
             let a = bit_set::lsb_pos(p);
             bit_set::clear_lsb(&mut p);
             let attack =  slide.get(a, king_pos);
-            let blockers = bit_set::intersect(attack, bit_set::difference(pinners, all_pieces));
-            if count(blockers) == 0 {
-                bit_set::set(&mut check, a);
-            }
-            if bit_set::intersect(attack, bit_set::difference(pinners, all_pieces)) == 0 {
+            let blockers = bit_set::intersect(attack, bit_set::difference(king_attackers, all_pieces));
+            let count = bit_set::count(blockers);
+            if count == 0 {
                 bit_set::set(&mut check, a);
             }
             let pf = intersect(attack, friends);
@@ -187,7 +176,7 @@ impl Board {
                 pinned = bit_set::union(pinned, pf);
             }
         }
-        bit_set::show(pinners);
+        bit_set::show(king_attackers);
         bit_set::show(pinned);
         
         for piece in self.mailbox.iter().filter(|p| p.player == self.active) {
@@ -207,11 +196,8 @@ impl Board {
                     continue;
                 }
                 let is_capture = bit_set::intersect(enemies, nss);
-                if bit_set::intersect(ss, pinned) != 0 {
-                    let resolves_pin = bit_set::difference(nss, pinners);
-                    if resolves_pin == pinners {
-                        continue;
-                    }
+                if bit_set::intersect(ss, pinned) != 0{
+                    
                 }
                 res.push(
                     match self.mailbox.get(bit_set::lsb_pos(is_capture)) {
