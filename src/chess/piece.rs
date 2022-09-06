@@ -68,3 +68,9 @@ pub const BLACK_START: [Set; 6] = [
     0x0008,
     0x0010,
 ];
+
+pub struct SpecefiedPiece {
+    pub player: Player,
+    pub piece: Piece,
+    pub square: u8,
+}

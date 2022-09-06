@@ -40,8 +40,12 @@ pub fn lsb(a: Set) -> Set {
     a & (!a).wrapping_add(1)
 }
 
-pub fn lsb_pos(a: Set) -> usize {
-    a.trailing_zeros() as usize
+pub fn lsb_pos(a: Set) -> u8 {
+    a.trailing_zeros() as u8
+}
+
+pub fn count(a: Set) -> u8 {
+    a.count_ones() as u8
 }
 
 pub fn show(a: Set) {

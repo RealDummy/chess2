@@ -1,13 +1,12 @@
 use super::{
-    piece::{Piece, Player},
+    piece::{Piece, Player, SpecefiedPiece},
     bit_set::{Set, self, union},
     board::{
-        rank, file, self
+        rank, file, self,
     }
 };
 trait MoveGen {
     fn new() -> Self;
-    fn init(&mut self);
     fn get_attacks<N>(&self, player: Player, square: N) -> Set
         where N: Into<usize> + Copy;
     fn get_moves<N>(&self, player: Player, square: N) -> Set
@@ -56,18 +55,12 @@ pub struct SliderMasks {
 
 impl PossibleMoveGenerator {
     pub fn new() -> Self{
-        let mut pawn = PawnMoveGen::new();
-        let mut knight = KnightMoveGen::new();
-        let mut bishop = BishopMoveGen::new();
-        let mut rook = RookMoveGen::new();
-        let mut queen = QueenMoveGen::new();
-        let mut king = KingMoveGen::new();
-        pawn.init();
-        knight.init();
-        bishop.init();
-        rook.init();
-        queen.init();
-        king.init();
+        let pawn = PawnMoveGen::new();
+        let knight = KnightMoveGen::new();
+        let bishop = BishopMoveGen::new();
+        let rook = RookMoveGen::new();
+        let queen = QueenMoveGen::new();
+        let king = KingMoveGen::new();
         Self {
             pawn,
             knight,
@@ -77,43 +70,36 @@ impl PossibleMoveGenerator {
             king
         }
     }
-    pub fn get_moves<N>(&self, player: Player, piece: Piece, square: N) -> Set 
-        where N: Into<usize> + Copy {
-        match piece {
-            Piece::Pawn =>   self.pawn.get_moves(player, square),
-            Piece::Knight => self.knight.get_moves(player, square),
-            Piece::Bishop => self.bishop.get_moves(player, square),
-            Piece::Rook =>   self.rook.get_moves(player, square),
-            Piece::Queen =>  self.queen.get_moves(player, square),
-            Piece::King =>   self.king.get_moves(player, square)
+    pub fn get_moves(&self, sp: &SpecefiedPiece) -> Set {
+         match sp.piece {
+            Piece::Pawn =>   self.pawn.get_moves(sp.player, sp.square),
+            Piece::Knight => self.knight.get_moves(sp.player, sp.square),
+            Piece::Bishop => self.bishop.get_moves(sp.player, sp.square),
+            Piece::Rook =>   self.rook.get_moves(sp.player, sp.square),
+            Piece::Queen =>  self.queen.get_moves(sp.player, sp.square),
+            Piece::King =>   self.king.get_moves(sp.player, sp.square)
         }
     }
-    pub fn get_attacks<N>(&self, player: Player, piece: Piece, square: N) -> Set 
-        where N: Into<usize> + Copy {
-        match piece {
-            Piece::Pawn =>   self.pawn.get_attacks(player, square),
-            Piece::Knight => self.knight.get_attacks(player, square),
-            Piece::Bishop => self.bishop.get_attacks(player, square),
-            Piece::Rook =>   self.rook.get_attacks(player, square),
-            Piece::Queen =>  self.queen.get_attacks(player, square),
-            Piece::King =>   self.king.get_attacks(player, square)
+    pub fn get_attacks(&self, sp: &SpecefiedPiece) -> Set {
+        match sp.piece {
+            Piece::Pawn =>   self.pawn.get_attacks(sp.player, sp.square),
+            Piece::Knight => self.knight.get_attacks(sp.player, sp.square),
+            Piece::Bishop => self.bishop.get_attacks(sp.player, sp.square),
+            Piece::Rook =>   self.rook.get_attacks(sp.player, sp.square),
+            Piece::Queen =>  self.queen.get_attacks(sp.player, sp.square),
+            Piece::King =>   self.king.get_attacks(sp.player, sp.square)
         }
     }
 }
 
 impl MoveGen for PawnMoveGen {
     fn new() -> Self {
-        Self {
-            lookup_black_moves: [0; 64],
-            lookup_black_attacks: [0; 64],
-            lookup_white_moves: [0; 64],
-            lookup_white_attacks: [0;64],
-        }
-    }
-    fn init(&mut self) {
-        //init white
-        for ((m,a), square) in self.lookup_white_moves.iter_mut()
-            .zip(self.lookup_white_attacks.iter_mut()).zip(0u8..) {
+        let mut lookup_black_moves = [0; 64];
+        let mut lookup_black_attacks = [0; 64];
+        let mut lookup_white_moves = [0; 64];
+        let mut lookup_white_attacks = [0;64];
+        for ((m,a), square) in lookup_white_moves.iter_mut()
+            .zip(lookup_white_attacks.iter_mut()).zip(0u8..) {
             if rank(square) > 6 || rank(square) < 1 {
                 continue;
             }
@@ -128,8 +114,8 @@ impl MoveGen for PawnMoveGen {
                 bit_set::set(m, board::adjust_square(square, 0, -2));
             }
         }
-        for ((m,a), square) in self.lookup_black_moves.iter_mut()
-            .zip(self.lookup_black_attacks.iter_mut()).zip(0u8..) {
+        for ((m,a), square) in lookup_black_moves.iter_mut()
+            .zip(lookup_black_attacks.iter_mut()).zip(0u8..) {
             if rank(square) < 1 || rank(square) > 6 {
                 continue;
             }
@@ -144,7 +130,15 @@ impl MoveGen for PawnMoveGen {
                 bit_set::set(m, board::adjust_square(square, 0, 2));
             }
         }
+
+        Self {
+            lookup_black_moves,
+            lookup_black_attacks,
+            lookup_white_moves,
+            lookup_white_attacks
+        }
     }
+
     fn get_attacks<N>(&self, player: Player, square: N) -> Set 
         where N: Into<usize>+ Copy {
         match player {
@@ -165,15 +159,11 @@ impl MoveGen for PawnMoveGen {
 
 impl MoveGen for KnightMoveGen {
     fn new() -> Self {
-        Self {
-            lookup: [0; 64],
-        }
-    }
-    fn init(&mut self) {
         let pattern = [
             (2,1),(2,-1),(1,2),(1,-2),(-2,1),(-2,-1),(-1,-2),(-1,2)
         ];
-        for (set,square) in &mut self.lookup.iter_mut().zip(0u8..){
+        let mut lookup = [0; 64];
+        for (set,square) in lookup.iter_mut().zip(0u8..){
             for (file, rank) in pattern {
                 let move_square = match board::adjust_square_checked(square, file, rank) {
                     Some(n) => n,
@@ -182,6 +172,9 @@ impl MoveGen for KnightMoveGen {
                 bit_set::set(set, move_square);
             }
 
+        }
+        Self {
+            lookup: [0; 64],
         }
     }
 
@@ -198,12 +191,8 @@ impl MoveGen for KnightMoveGen {
 
 impl MoveGen for BishopMoveGen {
     fn new() -> Self {
-        Self {
-            lookup: [0; 64],
-        }
-    }
-    fn init(&mut self) {
-        for (set, square) in self.lookup.iter_mut().zip(0u8..) {
+        let mut lookup = [0; 64];
+        for (set, square) in lookup.iter_mut().zip(0u8..) {
             
             let dirs:[(i32,i32); 4] = [(1,1), (-1,1), (1,-1), (-1,-1)];
             for (df, dr) in dirs {
@@ -220,6 +209,9 @@ impl MoveGen for BishopMoveGen {
 
             bit_set::unset(set, square);
         }
+        Self {
+            lookup,
+        }
     }
 
     fn get_attacks<N>(&self, player: Player, square: N) -> Set
@@ -235,19 +227,19 @@ impl MoveGen for BishopMoveGen {
 
 impl MoveGen for RookMoveGen {
     fn new() -> Self {
-        Self {
-            lookup_file: [0; 8],
-            lookup_rank: [0; 8],
-        }
-    }
-    fn init(&mut self) {
+        let mut lookup_file = [0;8];
         let starter_file: Set = 0x0101010101010101u64;
-        for (set, file) in self.lookup_file.iter_mut().zip(0u8..) {
+        for (set, file) in lookup_file.iter_mut().zip(0u8..) {
             *set = starter_file << file
         }
+        let mut lookup_rank = [0;8];
         let starter_rank: Set = 0xffu64;
-        for (set, rank) in self.lookup_rank.iter_mut().zip(0u8..) {
+        for (set, rank) in lookup_rank.iter_mut().zip(0u8..) {
             *set = starter_rank << (rank * 8);
+        }
+        Self {
+            lookup_file,
+            lookup_rank,
         }
     }
 
@@ -267,14 +259,10 @@ impl MoveGen for RookMoveGen {
 
 impl MoveGen for QueenMoveGen {
     fn new() -> Self {
-        Self {
-            lookup: [0; 64],
-        }
-    }
-    fn init(&mut self) {
+        let mut lookup = [0; 64];
         let rook_file = 0x0101010101010101u64;
         let rook_rank = 0xffu64;
-        for (set, square) in self.lookup.iter_mut().zip(0u8..) {
+        for (set, square) in lookup.iter_mut().zip(0u8..) {
             let dirs:[(i32,i32); 4] = [(1,1), (-1,1), (1,-1), (-1,-1)];
             for (df, dr) in dirs {
                 for (nf, nr) in (0..8)
@@ -293,6 +281,9 @@ impl MoveGen for QueenMoveGen {
             *set = union(*set, rook_attack);
             bit_set::unset(set, square);
         }
+        Self {
+            lookup,
+        }
     }
 
     fn get_attacks<N>(&self, player: Player, square: N) -> Set
@@ -308,18 +299,12 @@ impl MoveGen for QueenMoveGen {
 
 impl MoveGen for KingMoveGen {
     fn new() -> Self {
-        Self {
-            castle_moves: [0x4400000000000000, 0x44],
-            castle_square: [0x1000000000000000, 0x10],
-            lookup: [0; 64],
 
-        }
-    }
-    fn init(&mut self) {
         let dirs = [
             (1,1), (0,1), (-1,1), (-1,0),(-1,-1),(0,-1),(1,-1),(1,0),
         ];
-        for (set, square) in self.lookup.iter_mut().zip(0u8..) 
+        let mut lookup = [0;64];
+        for (set, square) in lookup.iter_mut().zip(0u8..) 
         {
             for (df, dr) in dirs {
                 match board::adjust_square_checked(square, df, dr) {
@@ -331,6 +316,13 @@ impl MoveGen for KingMoveGen {
                     }
                 }
             }
+        }
+
+        Self {
+            castle_moves: [0x4400000000000000, 0x44],
+            castle_square: [0x1000000000000000, 0x10],
+            lookup,
+
         }
     }
 
@@ -370,15 +362,7 @@ impl SliderMasks {
                             bit_set::set(set, i as usize);
                             i += m;
                         }
-                        if m != 8 && *set != 0 {
-
-                            bit_set::show(*set);
-                        }
                     }
-                }
-                if *set != 0 {
-
-                    //bit_set::show(*set);
                 }
             }
         }

@@ -10,7 +10,7 @@ pub enum MoveType {
     Promotion(Piece),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct MoveSquares {
     pub from: u8,
     pub to: u8,
