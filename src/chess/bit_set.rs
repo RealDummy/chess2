@@ -48,6 +48,18 @@ pub fn count(a: Set) -> u8 {
     a.count_ones() as u8
 }
 
+pub fn iter(set: Set) -> SetIter {
+    SetIter {
+        set
+    }
+}
+
+pub fn iter_pos(set: Set) -> SetPosIter {
+    SetPosIter {
+        set
+    }
+}
+
 pub fn show(a: Set) {
     println!("{}", a);
     println!("{}  ┏━━━━━━━━━━━━━━━━━━━━━━━━┓", color::Fg(color::White));
@@ -84,9 +96,38 @@ pub fn show(a: Set) {
     println!("    A  B  C  D  E  F  G  H ");
 }
 
+pub struct SetIter {
+    set: Set,
+}
+impl Iterator for SetIter {
+    type Item = Set;
+    fn next(&mut self) -> Option<Self::Item> {
+        let res = lsb(self.set);
+        clear_lsb(&mut self.set);
+        match res {
+            0 => None,
+            _ => Some(res),
+        }
+    }
+}
+
+pub struct SetPosIter {
+    set: Set,
+}
+impl Iterator for SetPosIter {
+    type Item = u8;
+    fn next(&mut self) -> Option<Self::Item> {
+        let res = lsb_pos(self.set);
+        clear_lsb(&mut self.set);
+        match res {
+            64 => None,
+            _ => Some(res),
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
-
     #[test]
     fn bit_twiddle() {
         assert!(super::lsb(15) == 1);

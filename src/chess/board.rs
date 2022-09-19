@@ -1,6 +1,6 @@
+use std::convert::TryInto;
 use std::vec::Vec;
 
-use super::bit_set::{union, intersect, count};
 use super::input;
 use crate::chess::piece::{Piece, BLACK_START, WHITE_START, Player, SpecefiedPiece};
 use crate::chess::bit_set;
@@ -8,6 +8,7 @@ pub use super::moves::{Move, MoveType, MoveSquares};
 use super::generator::{PossibleMoveGenerator, SliderMasks};
 use bit_set::Set;
 use termion::{color};
+use log::{info};
 
 pub fn file<N: Into<usize> + Copy + std::ops::Div + TryFrom<usize>>(square: N) -> N {
     (square.into() % 8).try_into().ok().unwrap()
@@ -15,6 +16,27 @@ pub fn file<N: Into<usize> + Copy + std::ops::Div + TryFrom<usize>>(square: N) -
 pub fn rank<N: Into<usize> + Copy + std::ops::Div + TryFrom<usize>>(square: N) -> N {
     (square.into() / 8).try_into().ok().unwrap()
 }   
+
+fn pretty_file(file: u8) -> char {
+    let a: u8 = 'A' as u8;
+    (a + file).into()
+}
+fn pretty_rank(rank: u8) -> char {
+    let eight: u8 = '8' as u8;
+    (eight - rank).into()
+
+}
+fn pretty_square(square: u8) -> String {
+    format!("{}{}", pretty_file(file(square)), pretty_rank(rank(square)))
+}   
+
+fn fmv(from: u8, to: u8, promote: Option<Piece>) -> String {
+    match promote {
+        None => format!("{}{}",pretty_square(from), pretty_square(to)),
+        Some(piece) => format!("{}{}{}", pretty_square(from), pretty_square(to), piece.get_char(Player::White))
+    }
+    
+}
 
 pub fn adjust_square<N: TryInto<i32> + Copy + std::ops::Add + TryFrom<i32>>(square: N, file: i32, rank: i32) -> N {
    (square.try_into().ok().unwrap() + file + rank * 8).try_into().ok().unwrap()
@@ -34,11 +56,35 @@ pub fn adjust_square_checked<N: TryInto<i32> + Into<usize> + TryFrom<usize> + st
         _ => None,
     }
 }
+#[derive(Clone)]
+enum LostCastleRights {
+    None,
+    KingSide,
+    QueenSide,
+    Both,
+}
+
+//things to add: king pos
+#[derive(Clone)]
+struct MoveGenCache {
+    pub opponent: Player,
+    pub friends: Set,
+    pub enemies: Set,
+    pub all_pieces: Set,
+    pub pinned: Set,
+    pub pinners: Set,
+    pub check: Set,
+    pub lost_castle_rights: [LostCastleRights; 2];
+}
 
 pub struct Board {
     active: Player,
     pieces: [[Set;6]; 2],
     mailbox: Mailbox,
+    half_move: u32,
+    en_pessant_target: Option<u8>,
+    last_irreversable: u32,
+    cache: Option<MoveGenCache>,
 
 }
 #[derive(Clone, Copy, Debug)]
@@ -60,6 +106,10 @@ impl Board {
             pieces,
             active: Player::White,
             mailbox: Mailbox::from(pieces),
+            half_move: 0,
+            en_pessant_target: None,
+            last_irreversable: 0,
+            cache: None,
         }
     }
     fn get_set(&self, player: Player, piece: Piece) -> Set {
@@ -129,91 +179,223 @@ impl Board {
         let set = self.get_set_mut(p.player, p.piece);
         bit_set::unset(set, m.from);
         bit_set::set(set, m.to);
-        match self.mailbox.force_move(m) {
-            Some(p) => bit_set::unset(&mut self.get_set(self.active.invert(), p.piece), p.square),
+        match self.mailbox.force_move(&m) {
+            Some(p) => {
+                bit_set::unset(self.get_set_mut(self.active.invert(), p.piece), p.square)
+            },
             None => ()
         }
         true
     }
-
-    pub fn generate_psudolegal(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
-        let mut res: Vec<Move> =vec![];
-        let opp = self.active.invert(); 
+    fn get_square_attackers(&self, square: u8, gen: &PossibleMoveGenerator) -> Set {
+        Piece::iter().fold(0, |a,piece| {
+            let attacks = gen.get_attacks(&SpecefiedPiece { player: self.active, piece, square });
+            let attackers = bit_set::intersect(self.get_set(self.active.invert(), piece), attacks);
+            bit_set::union(a, attackers)
+        })
+    }
+    fn create_cache(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) {
+        let opponent = self.active.invert(); 
+        info!("current player: {:?}", self.active);
         let friends = self.pieces[self.active.index()].iter()
             .fold(0,|a,&x| bit_set::union(a, x));
-        let enemies = self.pieces[opp.index()].iter()
+        let enemies = self.pieces[opponent.index()].iter()
             .fold(0,|a,&x| bit_set::union(a, x));
         let all_pieces = bit_set::union(friends, enemies);
         let king_pos = bit_set::lsb_pos(self.get_set(self.active, Piece::King));
+        let king_attackers:Set = self.get_square_attackers(king_pos, gen);
 
-        let mut king_attackers:Set = 0;
-        for piece in Piece::iter() {
-            let king_piece_check = gen.get_attacks(
-                &SpecefiedPiece { 
-                    player: self.active, //only matters for pawns, where the king should be attacking like a pawn in order to find enemy pawn that are attacking him
-                    piece, 
-                    square: king_pos 
-                }
-            );
-            let attackers = bit_set::intersect(self.get_set(opp, piece), king_piece_check);
-            king_attackers = bit_set::union(king_attackers, attackers);
-        }
-
-        let mut p = king_attackers;
         let mut pinned:Set = 0;
+        let mut pinners:Set = 0;
         let mut check:Set = 0;
-        while p != 0 {
-            let a = bit_set::lsb_pos(p);
-            bit_set::clear_lsb(&mut p);
-            let attack =  slide.get(a, king_pos);
+
+        for attacker in bit_set::iter_pos(king_attackers) {
+            let attack =  slide.get(attacker, king_pos);
             let blockers = bit_set::intersect(attack, bit_set::difference(king_attackers, all_pieces));
             let count = bit_set::count(blockers);
             if count == 0 {
-                bit_set::set(&mut check, a);
+                bit_set::set(&mut check, attacker);
             }
-            let pf = intersect(attack, friends);
+            let pf = bit_set::intersect(attack, friends);
             if bit_set::count(pf) == 1 {
                 pinned = bit_set::union(pinned, pf);
+                bit_set::set(&mut pinners, attacker);
             }
         }
-        bit_set::show(king_attackers);
-        bit_set::show(pinned);
         
-        for piece in self.mailbox.iter().filter(|p| p.player == self.active) {
-            let ss = 1u64 << piece.square;
-            let attacks = gen.get_attacks(&piece);
-            let moves = gen.get_moves(&piece);
-            let mut all_moves = bit_set::union(attacks, moves);
-            while all_moves != 0 {
-                let new_square = bit_set::lsb_pos(all_moves);
-                bit_set::clear_lsb(&mut all_moves);
-                let nss = 1u64 << new_square;
-                if bit_set::intersect(friends, nss) != 0 {
-                    continue;
+        self.cache = Some(MoveGenCache {
+            opponent,
+            friends,
+            enemies,
+            all_pieces,
+            pinned,
+            pinners,
+            check
+        });
+    }
+
+    pub fn check_move(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks, candidate: MoveSquares) -> bool {
+        if let None = self.cache {
+            self.create_cache(gen, slide);
+        }
+        self.check_move_unchecked(gen, slide, candidate)
+    }
+
+    fn check_move_unchecked(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks, candidate: MoveSquares) -> bool {
+        let MoveGenCache{
+            opponent,
+            friends,
+            enemies,
+            all_pieces,
+            pinned,
+            pinners,
+            check,
+        } = self.cache.as_ref().unwrap().clone();
+        let square = candidate.from;
+        let ss = 1u64 << square;
+        let new_square = candidate.to;
+        let nss = 1u64 << new_square;
+        let piece = match self.mailbox.get(square) {
+            Some(n) => n,
+            None => {
+                info!("move {} rejected: no piece there", fmv(square, new_square, None));
+                return false;
+            }
+        };
+        if bit_set::intersect(friends, nss) != 0 {
+            info!("move {} rejected: lands on friend", fmv(square, new_square, None));
+            return false;
+        }
+        let s = slide.get(piece.square, new_square);
+        if bit_set::intersect(s, all_pieces) != 0 {
+            info!("move {} rejected: slide blocked", fmv(square, new_square, None));
+            return false;
+        }
+        let capture = bit_set::intersect(enemies, nss);
+        if bit_set::intersect(ss, pinned) != 0{
+            if bit_set::intersect(nss, pinners) == 0 {
+                info!("move {} rejected: piece is pinned", fmv(square, new_square, None));
+                return false;
+            }
+        }
+        let king_pos = bit_set::lsb_pos(self.get_set(self.active, Piece::King));
+        match piece.piece {
+            Piece::King => {
+                let new_attackers = self.get_square_attackers(new_square, gen);
+                let is_attacked = bit_set::iter_pos(new_attackers).any(|attacker_pos|{
+                    let attack = slide.get(new_square, attacker_pos);
+                    let blockers = bit_set::intersect(all_pieces, attack);
+                    bit_set::count(blockers) == 0
+                });
+                if is_attacked {
+                    info!("move {} rejected: king moved into check", fmv(piece.square, new_square, None));
+                    return false;
                 }
-                let s = slide.get(piece.square, new_square);
-                if bit_set::intersect(s, all_pieces) != 0 {
-                    continue;
-                }
-                let is_capture = bit_set::intersect(enemies, nss);
-                if bit_set::intersect(ss, pinned) != 0{
-                    
-                }
-                res.push(
-                    match self.mailbox.get(bit_set::lsb_pos(is_capture)) {
-                        Some(SpecefiedPiece{piece: cap_piece, ..}) => Move{from: piece.square as u8, to: new_square as u8, move_type: MoveType::Capture(cap_piece)},
-                        None => Move { from: piece.square as u8, to: new_square as u8, move_type: MoveType::Quiet }
+            }
+            _ => {
+                if bit_set::count(check) != 0 {
+                    let resolved_checks = bit_set::iter_pos(check).all(|check_pos| {
+                        let attack = slide.get(king_pos, check_pos);
+                        let block = bit_set::intersect(attack, nss);
+                        let capture = bit_set::intersect(nss, 1u64 << check_pos);
+                        println!("{} {block} {capture}", piece.square);
+                        capture != 0 || block != 0
+                    });
+                    if !resolved_checks {
+                        info!("move {} rejected: king still in check", fmv(piece.square, new_square, None));
+                        return false;
                     }
-                )
+                }
+            }
+        }
+        true
+    }
+
+
+    pub fn generate_legal(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
+        info!("---starting generation for half move {}----", self.half_move);
+        let mut res: Vec<Move> =vec![];
+        self.create_cache(gen, slide);
+        let enemies = self.cache.as_ref().unwrap().enemies;
+        let friends = self.cache.as_ref().unwrap().friends;
+        for piece in self.mailbox.iter().filter(|p| p.player == self.active) {
+            let possible_moves = bit_set::difference(friends, gen.get_moves(&piece));
+            let quiet_moves = bit_set::difference(enemies, possible_moves);
+            for square in bit_set::iter_pos(quiet_moves) {
+                let candidate = MoveSquares {
+                    from: piece.square,
+                    to: square,
+                    promote: None,
+                };
+                if self.check_move_unchecked(gen, slide, candidate) {
+                    res.push(Move {
+                        from: piece.square,
+                        to: square,
+                        move_type: MoveType::Quiet,
+                    })
+                }
+            }
+            let possible_captures = bit_set::difference(friends, gen.get_attacks(&piece));
+            let captures = bit_set::intersect(enemies, possible_captures);
+            for square in bit_set::iter_pos(captures) {
+                let candidate = MoveSquares {
+                    from: piece.square,
+                    to: square,
+                    promote: None,
+                };
+                if self.check_move_unchecked(gen, slide, candidate) {
+                    res.push(Move {
+                        from: piece.square,
+                        to: square,
+                        move_type: MoveType::Capture(self.mailbox.get(square).unwrap().piece)
+                    })
+                }
             }
         }
         res
     }
+
+    //DOES NOT CHECK IF MOVE IS LEGAL, panics if an empty square is moved.
+    pub fn make_move(&mut self, m: &MoveSquares) {
+        let piece = match self.mailbox.get(m.from) {
+            Some(n) => n,
+            None => {panic!("move {:?} attempted, but no piece is on {}", m, m.from);}
+        };
+        let set = self.get_set_mut(piece.player, piece.piece);
+        bit_set::unset(set, m.from);
+        bit_set::set(set, m.to);
+        let capture = match self.mailbox.force_move(m) {
+            Some(cap) => {
+                let set = self.get_set_mut(cap.player, cap.piece);
+                bit_set::unset(set, m.to);
+                true
+            },
+            None => false,
+        };
+
+
+        self.en_pessant_target = None;
+        if capture {
+            self.last_irreversable = self.half_move;
+        }
+        else if Piece::Pawn == piece.piece {
+            self.last_irreversable = self.half_move;
+            if (rank(m.to) as i32 - rank(m.from) as i32).abs() == 2 {
+                self.en_pessant_target = Some(m.to);
+            }
+        }
+        self.half_move += 1;
+        self.active = self.active.invert();
+    }
+
     pub fn shitty_play(&mut self) {
         let gen = PossibleMoveGenerator::new();
         let slide = SliderMasks::new();
         loop {
-            let psudo_moves = self.generate_psudolegal(&gen, &slide);
+            let psudo_moves = self.generate_legal(&gen, &slide);
+            if psudo_moves.len() == 0 {
+                println!("Checkmate or draw!");
+            }
             self.show();
             loop {
                 let s = input::get_input();
@@ -227,24 +409,21 @@ impl Board {
                 match psudo_moves.iter().find(|&target| {
                     target.to == m.to && target.from == m.from
                 } ) {
-                    Some(_) => {
-                        if self.force_move(m, &gen) == false {
-                            println!("Invalid Move (IDK bro)");
-                            continue;
-                        }
-
-                        println!("{:?}", psudo_moves);
+                    Some(m) => {
+                        self.make_move(&MoveSquares {
+                            from: m.from,
+                            to: m.to,
+                            promote: None,
+                        })
                     }
                     None => {println!("Invalid Move (not in psuedolegal moves)"); continue;}
                 }
-                self.active = self.active.invert();
                 break;
             }
             
         }
     }
 }
-
 impl Mailbox {
     pub fn new() -> Self {
         Self {
@@ -276,7 +455,7 @@ impl Mailbox {
         Some(SpecefiedPiece {piece, player, square})
     }
 
-    pub fn force_move(&mut self, m: MoveSquares) -> Option<SpecefiedPiece> {
+    pub fn force_move(&mut self, m: &MoveSquares) -> Option<SpecefiedPiece> {
         let t = self.get(m.from)?;
         self.squares[m.from as usize] = None;
         let res = self.get(m.to);
