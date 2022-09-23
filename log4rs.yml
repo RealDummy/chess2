@@ -1,0 +1,10 @@
+  appenders:
+    stdout:
+      kind: file
+      path: /Users/samwortzman/Documents/code/rust/chess2/logs/log.log
+      encoder:
+        pattern: "{L}: {m}\n"
+  
+#  root:
+#    appenders: 
+#      - stdout

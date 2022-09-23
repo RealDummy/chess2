@@ -1,6 +1,6 @@
 use crate::chess::moves;
 use crate::chess::piece::Piece;
-fn get_square(square: &str) -> Result<u8, String>{
+pub fn get_square(square: &str) -> Result<u8, String>{
     let mut square_iter = square.chars();
     let file = match square_iter.next() {
         Some(c) => match c.to_ascii_lowercase() {

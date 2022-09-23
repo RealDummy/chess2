@@ -36,8 +36,6 @@ struct QueenMoveGen {
 
 struct KingMoveGen {
     lookup: [Set; 64],
-    castle_square: [usize; 2],
-    castle_moves: [Set; 2],
 }
 
 pub struct PossibleMoveGenerator {
@@ -100,7 +98,7 @@ impl MoveGen for PawnMoveGen {
         let mut lookup_white_attacks = [0;64];
         for ((m,a), square) in lookup_white_moves.iter_mut()
             .zip(lookup_white_attacks.iter_mut()).zip(0u8..) {
-            if rank(square) > 6 || rank(square) < 1 {
+            if rank(square) < 1 {
                 continue;
             }
             bit_set::set(m, board::adjust_square(square, 0, -1));
@@ -116,7 +114,7 @@ impl MoveGen for PawnMoveGen {
         }
         for ((m,a), square) in lookup_black_moves.iter_mut()
             .zip(lookup_black_attacks.iter_mut()).zip(0u8..) {
-            if rank(square) < 1 || rank(square) > 6 {
+            if rank(square) > 6 {
                 continue;
             }
             bit_set::set(m, board::adjust_square(square, 0, 1));
@@ -174,7 +172,7 @@ impl MoveGen for KnightMoveGen {
 
         }
         Self {
-            lookup: [0; 64],
+            lookup,
         }
     }
 
@@ -319,8 +317,6 @@ impl MoveGen for KingMoveGen {
         }
 
         Self {
-            castle_moves: [0x4400000000000000, 0x44],
-            castle_square: [0x1000000000000000, 0x10],
             lookup,
 
         }
@@ -333,11 +329,7 @@ impl MoveGen for KingMoveGen {
 
     fn get_moves<N>(&self, player: Player, square: N) -> Set
         where N: Into<usize> + Copy{
-        let bool_multi = match square.into() == self.castle_square[player.index()] {
-            true => 1,
-            false => 0,
-        };
-        bit_set::union(self.lookup[square.into()], bool_multi * self.castle_moves[player.index()])
+        self.get_attacks(player, square)
     }
 }
 
@@ -356,7 +348,7 @@ impl SliderMasks {
                     continue;
                 }
                 for m in 7..=9 {
-                    if diff % m == 0 {
+                    if diff % m == 0 && diff / m < 8 {
                         let mut i = min + m;
                         while i < max {
                             bit_set::set(set, i as usize);
@@ -372,5 +364,32 @@ impl SliderMasks {
     }
     pub fn get<N: Into<usize>>(&self, from: N, to: N) -> Set {
         self.masks[from.into()][to.into()]
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::chess::piece::{SpecefiedPiece, Player, Piece};
+
+    use super::{PossibleMoveGenerator, SliderMasks, bit_set};
+    #[test]
+    fn test() {
+        let gen = PossibleMoveGenerator::new();
+        assert!(gen.get_moves(&SpecefiedPiece {
+            player: Player::White,
+            piece: Piece::Rook,
+            square: 0
+        }) ==  0x1010101010101fe);
+        assert!(gen.get_moves(&SpecefiedPiece {
+            player: Player::White,
+            piece: Piece::Rook,
+            square: 56
+        }) ==  0xfe01010101010101);
+    }
+    #[test]
+    fn test2() {
+        let slide = SliderMasks::new();
+        assert!(slide.get(25u8, 4u8) == 0x40800);
+        
     }
 }

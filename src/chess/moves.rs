@@ -3,11 +3,11 @@ use crate::chess::piece::Piece;
 #[derive(Debug)]
 pub enum MoveType {
     Quiet,
-    Check,
     Capture(Piece),
     EnPassent,
-    Castle,
+    Castle(CastleType),
     Promotion(Piece),
+    CaptureAndPromotion(Piece, Piece),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -23,3 +23,8 @@ pub struct Move {
     pub move_type: MoveType
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum CastleType {
+    KingSide,
+    QueenSide,
+}

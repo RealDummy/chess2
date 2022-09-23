@@ -1,10 +1,11 @@
 use std::convert::TryInto;
+use std::slice::Iter;
 use std::vec::Vec;
 
-use super::input;
+use super::input::{self, get_square};
 use crate::chess::piece::{Piece, BLACK_START, WHITE_START, Player, SpecefiedPiece};
 use crate::chess::bit_set;
-pub use super::moves::{Move, MoveType, MoveSquares};
+pub use super::moves::{Move, MoveType, MoveSquares, CastleType};
 use super::generator::{PossibleMoveGenerator, SliderMasks};
 use bit_set::Set;
 use termion::{color};
@@ -18,7 +19,7 @@ pub fn rank<N: Into<usize> + Copy + std::ops::Div + TryFrom<usize>>(square: N) -
 }   
 
 fn pretty_file(file: u8) -> char {
-    let a: u8 = 'A' as u8;
+    let a: u8 = 'a' as u8;
     (a + file).into()
 }
 fn pretty_rank(rank: u8) -> char {
@@ -30,13 +31,7 @@ fn pretty_square(square: u8) -> String {
     format!("{}{}", pretty_file(file(square)), pretty_rank(rank(square)))
 }   
 
-fn fmv(from: u8, to: u8, promote: Option<Piece>) -> String {
-    match promote {
-        None => format!("{}{}",pretty_square(from), pretty_square(to)),
-        Some(piece) => format!("{}{}{}", pretty_square(from), pretty_square(to), piece.get_char(Player::White))
-    }
-    
-}
+
 
 pub fn adjust_square<N: TryInto<i32> + Copy + std::ops::Add + TryFrom<i32>>(square: N, file: i32, rank: i32) -> N {
    (square.try_into().ok().unwrap() + file + rank * 8).try_into().ok().unwrap()
@@ -65,6 +60,16 @@ enum CastleRights {
     QueenSide = 0b10,
     Both = 0b11,
 }
+impl CastleRights {
+    fn iter<'a>(&'a self) -> Iter<CastleType> {
+        match self {
+            Self::None => [].iter().to_owned(),
+            Self::KingSide => [CastleType::KingSide].iter().to_owned(),
+            Self::QueenSide => [CastleType::QueenSide].iter().to_owned(),
+            Self::Both => [CastleType::KingSide, CastleType::QueenSide].iter().to_owned(),
+        }
+    }
+}
 
 impl From<u8> for CastleRights {
     fn from(a: u8) -> Self {
@@ -82,6 +87,7 @@ impl CastleRights {
         ((!(*self as u8)) & 0b11).into()
    }
 }
+#[derive(Clone)]
 struct LostCastleRights(CastleRights);
 
 impl LostCastleRights {
@@ -104,6 +110,7 @@ struct MoveGenCache {
     pub check: Set,
 }
 
+#[derive(Clone)]
 pub struct Board {
     active: Player,
     pieces: [[Set;6]; 2],
@@ -123,7 +130,7 @@ struct MailboxPiece {
 }
 
 
-
+#[derive(Clone)]
 struct Mailbox {
     squares: [Option<MailboxPiece>; 65] //not a typo, 0 has 64 trailing 0's, so squares[64] should be None always!
 }
@@ -142,15 +149,125 @@ impl Board {
             lost_castle_rights: [LostCastleRights(CastleRights::None), LostCastleRights(CastleRights::None)],
         }
     }
+    pub fn empty() -> Self {
+        let pieces = [[0;6];2];
+        Board {
+            pieces,
+            active: Player::White,
+            mailbox: Mailbox::from(pieces),
+            half_move: 0,
+            en_passant_target: None,
+            last_irreversable: 0,
+            cache: None,
+            lost_castle_rights: [LostCastleRights(CastleRights::None), LostCastleRights(CastleRights::None)],
+        }
+    }
+    pub fn from_fen(fen: &str) -> Self {
+        let mut board = Self::empty();
+        let mut rank: i32 = 0;
+        let mut file: i32 = 0;
+        let mut chiter = fen.chars();
+
+        //set up board
+        chiter.any(|c| {
+            match c {
+                '1'..='8' => {file += c.to_digit(10).unwrap() as i32 - 1;},
+                'k' => bit_set::set(board.get_set_mut(Player::Black, Piece::King), adjust_square(0u8, file, rank)),
+                'K' => bit_set::set(board.get_set_mut(Player::White, Piece::King), adjust_square(0u8, file, rank)),
+                'q' => bit_set::set(board.get_set_mut(Player::Black, Piece::Queen), adjust_square(0u8, file, rank)),
+                'Q' => bit_set::set(board.get_set_mut(Player::White, Piece::Queen), adjust_square(0u8, file, rank)),
+                'r' => bit_set::set(board.get_set_mut(Player::Black, Piece::Rook), adjust_square(0u8, file, rank)),
+                'R' => bit_set::set(board.get_set_mut(Player::White, Piece::Rook), adjust_square(0u8, file, rank)),
+                'b' => bit_set::set(board.get_set_mut(Player::Black, Piece::Bishop), adjust_square(0u8, file, rank)),
+                'B' => bit_set::set(board.get_set_mut(Player::White, Piece::Bishop), adjust_square(0u8, file, rank)),
+                'n' => bit_set::set(board.get_set_mut(Player::Black, Piece::Knight), adjust_square(0u8, file, rank)),
+                'N' => bit_set::set(board.get_set_mut(Player::White, Piece::Knight), adjust_square(0u8, file, rank)),
+                'p' => bit_set::set(board.get_set_mut(Player::Black, Piece::Pawn), adjust_square(0u8, file, rank)),
+                'P' => bit_set::set(board.get_set_mut(Player::White, Piece::Pawn), adjust_square(0u8, file, rank)),
+                '/' => {return false;},
+                ' ' => {return true;},
+                _ => {return false},
+            }
+            file += 1;
+            if file > 7 {
+                file = 0;
+                rank += 1;
+            }
+            false
+        });
+        //get active player
+        let mut active = Player::White;
+        chiter.any(|c| {
+            if c == ' ' {
+                return true;
+            }
+            active = match c {
+                'b' => Player::Black,
+                'w' | _ => Player::White,
+            };
+            false
+
+        });
+        //castling rights
+        let mut black_castle_rights = LostCastleRights(CastleRights::None);
+        let mut white_castle_rights = LostCastleRights(CastleRights::None);
+        chiter.any(|c| {
+            if c == ' ' {
+                return true;
+            }
+            match c {
+                'q' => {black_castle_rights.lose(CastleRights::QueenSide)}
+                'k' => {black_castle_rights.lose(CastleRights::KingSide)},
+                'Q' => {white_castle_rights.lose(CastleRights::QueenSide)},
+                'K' => {white_castle_rights.lose(CastleRights::KingSide)},
+                _ => (),
+            }
+            false
+        });
+        black_castle_rights = LostCastleRights(black_castle_rights.get_rights());
+        white_castle_rights = LostCastleRights(white_castle_rights.get_rights());
+
+        let ept = match get_square(&chiter.as_str()[0..2]) {
+            Ok(s) => Some(s),
+            Err(e) => {None}
+        };
+
+        chiter.any(|c| c == ' ');
+        
+        let last_pawn_move: String = chiter.by_ref().take_while(|c| c.is_ascii_digit()).collect();
+        let last_irreversable: u32 = last_pawn_move.parse().ok().unwrap_or(0);
+
+        let move_count: String = chiter.by_ref().take_while(|d| d.is_ascii_digit()).collect();
+        let half_move: u32 = move_count.parse().ok().unwrap_or(0) * 2 + active.index() as u32;
+        Self {
+            active,
+            pieces: board.pieces,
+            en_passant_target: ept,
+            mailbox: Mailbox::from(board.pieces),
+            half_move,
+            last_irreversable,
+            cache: None,
+            lost_castle_rights: [white_castle_rights, black_castle_rights]
+        }
+
+    }
+
     fn get_set(&self, player: Player, piece: Piece) -> Set {
         self.pieces[player.index()][piece.index()]
     }
     fn get_set_mut<'a>(&'a mut self, player: Player, piece: Piece) -> &'a mut Set{
         &mut self.pieces[player.index()][piece.index()]
     }
-    // pub fn iter_pieces<'a>(&'a self) -> MailboxIter<'a> {
-    //     self.mailbox.iter()
-    // }
+    
+    fn fmv(&self, from: u8, to: u8, promote: Option<Piece>) -> String {
+        let res = match promote {
+            None => format!("{}{}({})",pretty_square(from), pretty_square(to), self.half_move),
+            Some(piece) => format!("{}{}{}({})", pretty_square(from), pretty_square(to), piece.get_char(Player::White), self.half_move)
+        };
+        res
+        
+    }
+
     fn draw_board(buffer: &[char; 64], player: Player) {
         println!("{}  ┏━━━━━━━━━━━━━━━━━━━━━━━━┓", color::Fg(color::White));
         let square_iter  = match player {
@@ -224,9 +341,15 @@ impl Board {
             bit_set::union(a, attackers)
         })
     }
+    fn has_unblocked_square_attackers(&self, square: u8, gen: &PossibleMoveGenerator, slide: &SliderMasks, all_pieces: Set) -> bool {
+        let attackers = self.get_square_attackers(square, gen);
+        bit_set::iter_pos(attackers).any(|attacker|{
+            bit_set::intersect(slide.get(attacker, square), all_pieces) == 0
+        })
+    } 
     fn create_cache(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) {
         let opponent = self.active.invert(); 
-        info!("current player: {:?}", self.active);
+        ////info!("current player: {:?}", self.active);
         let friends = self.pieces[self.active.index()].iter()
             .fold(0,|a,&x| bit_set::union(a, x));
         let enemies = self.pieces[opponent.index()].iter()
@@ -247,12 +370,11 @@ impl Board {
                 bit_set::set(&mut check, attacker);
             }
             let pf = bit_set::intersect(attack, friends);
-            if bit_set::count(pf) == 1 {
+            if bit_set::count(pf) == 1 && count == 1 {
                 pinned = bit_set::union(pinned, pf);
                 bit_set::set(&mut pinners, attacker);
             }
         }
-        
         self.cache = Some(MoveGenCache {
             friends,
             enemies,
@@ -316,8 +438,47 @@ impl Board {
         true
     }
 
-    fn check_castle(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks, candidate: MoveSquares) -> bool {
-        todo!();
+    fn check_castle(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks, side: &CastleType) -> bool {
+        let check = self.cache.as_ref().unwrap().check;
+        if check != 0 {
+            return false;
+        }
+        let rook_pos = match self.active {
+            Player::White => {
+                match side {
+                    CastleType::KingSide => 63,
+                    CastleType::QueenSide => 56,
+                }
+            },
+            Player::Black => {
+                match side {
+                    CastleType::KingSide => 7,
+                    CastleType::QueenSide => 0,
+                }
+            }
+        };
+        if let Some( sp ) = self.mailbox.get(rook_pos) {
+            if sp.piece != Piece::Rook || sp.player != self.active {
+                self.lost_castle_rights[self.active.index()].lose(match side {
+                    CastleType::KingSide => CastleRights::KingSide,
+                    CastleType::QueenSide => CastleRights::QueenSide,
+                });
+                return false;
+            }
+        }
+        let king_pos = self.king_pos(self.active);
+        let between = slide.get(king_pos, rook_pos);
+        let all_pieces = self.cache.as_ref().unwrap().all_pieces;
+        if bit_set::intersect(all_pieces, between) != 0 {
+            return false;
+        }
+        let castle_square = Self::get_castle_square(self.active, side);
+        let king_slide = slide.get(king_pos, castle_square);
+        
+        bit_set::iter_pos(bit_set::union(king_slide, 1 << castle_square)).all(|p| {
+            !self.has_unblocked_square_attackers(p, gen, slide, all_pieces)
+        })
+        
     }
 
     fn check_move_unchecked(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks, candidate: MoveSquares) -> bool {
@@ -336,36 +497,49 @@ impl Board {
         let piece = match self.mailbox.get(square) {
             Some(n) => n,
             None => {
-                info!("move {} rejected: no piece there", fmv(square, new_square, None));
+                //info!("move {} rejected: no piece there", self.fmv(square, new_square, None));
                 return false;
             }
         };
         if bit_set::intersect(friends, nss) != 0 {
-            info!("move {} rejected: lands on friend", fmv(square, new_square, None));
+            //info!("move {} rejected: lands on friend", self.fmv(square, new_square, None));
             return false;
         }
         let s = slide.get(piece.square, new_square);
-        if bit_set::intersect(s, all_pieces) != 0 {
-            info!("move {} rejected: slide blocked", fmv(square, new_square, None));
+        let slide_blockers = bit_set::intersect(s, all_pieces);
+        if slide_blockers != 0 {
+            //info!("move {} rejected: slide blocked", self.fmv(square, new_square, None));
             return false;
         }
-        if bit_set::intersect(ss, pinned) != 0{
-            if bit_set::intersect(nss, pinners) == 0 {
-                info!("move {} rejected: piece is pinned", fmv(square, new_square, None));
+        let king_pos = bit_set::lsb_pos(self.get_set(self.active, Piece::King));
+        if bit_set::intersect(ss, pinned) != 0 { //if piece is pinned
+            if bit_set::iter_pos(pinners).any(|pinner|{ //for each pinner, check if any
+                bit_set::intersect( //new move doesnt intersect with pinner attack
+                    bit_set::union(
+                        1u64 << pinner, 
+                        slide.get(pinner, king_pos)
+                    ),
+                    nss
+                ) == 0 &&
+                bit_set::intersect( // and old position does intersect attack
+                    slide.get(pinner, king_pos), 
+                    ss
+                ) != 0
+            }) {
+                //info!("move {} rejected: piece is pinned", self.fmv(square, new_square, None));
                 return false;
             }
         }
-        let king_pos = bit_set::lsb_pos(self.get_set(self.active, Piece::King));
         match piece.piece {
             Piece::King => {
                 let new_attackers = self.get_square_attackers(new_square, gen);
                 let is_attacked = bit_set::iter_pos(new_attackers).any(|attacker_pos|{
                     let attack = slide.get(new_square, attacker_pos);
-                    let blockers = bit_set::intersect(all_pieces, attack);
+                    let blockers = bit_set::intersect(bit_set::difference(1 << piece.square, all_pieces), attack);
                     bit_set::count(blockers) == 0
                 });
                 if is_attacked {
-                    info!("move {} rejected: king moved into check", fmv(piece.square, new_square, None));
+                    //info!("move {} rejected: king moved into check", self.fmv(piece.square, new_square, None));
                     return false;
                 }
             }
@@ -378,7 +552,7 @@ impl Board {
                         capture != 0 || block != 0
                     });
                     if !resolved_checks {
-                        info!("move {} rejected: king still in check", fmv(piece.square, new_square, None));
+                       //info!("move {} rejected: king still in check", self.fmv(piece.square, new_square, None));
                         return false;
                     }
                 }
@@ -387,58 +561,125 @@ impl Board {
         true
     }
 
+    fn get_castle_square(player: Player, castle_type: &CastleType ) -> u8 {
+        match player {
+            Player::White => {
+                match castle_type {
+                    CastleType::KingSide => 62,
+                    CastleType::QueenSide => 58,
+                }
+            },
+            Player::Black => {
+                match castle_type {
+                    CastleType::KingSide => 6,
+                    CastleType::QueenSide => 2,
+                }
+            }
+        }
+    }
 
+    fn get_castle_rook(player: Player, castle_type: &CastleType) -> u8 {
+        match player {
+            Player::White => {
+                match castle_type {
+                    CastleType::KingSide => 63,
+                    CastleType::QueenSide => 56,
+                }
+            },
+            Player::Black => {
+                match castle_type {
+                    CastleType::KingSide => 7,
+                    CastleType::QueenSide => 0,
+                }
+            }
+        }
+    }
+    fn generate_promotions(sp: &SpecefiedPiece) -> Iter<Option<Piece>> {
+        match sp.piece {
+            Piece::Pawn => {
+               match (match sp.player {
+                    Player::White => 1,
+                    Player::Black => 6,
+                } == rank(sp.square) as i32) {
+                    true => [Some(Piece::Queen), Some(Piece::Rook), Some(Piece::Knight), Some(Piece::Bishop)].iter(),
+                    false => [None].iter(),
+                }
+            },
+            _ => [None].iter(),
+        }
+    }
     pub fn generate_legal(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
-        info!("---starting generation for half move {}----", self.half_move);
+        ////info!("---starting generation for half move {}----", self.half_move);
         let mut res: Vec<Move> =vec![];
         self.create_cache(gen, slide);
         let enemies = self.cache.as_ref().unwrap().enemies;
         let friends = self.cache.as_ref().unwrap().friends;
         for piece in self.mailbox.iter().filter(|p| p.player == self.active) {
+
             let possible_moves = bit_set::difference(friends, gen.get_moves(&piece));
             let quiet_moves = bit_set::difference(enemies, possible_moves);
-            for square in bit_set::iter_pos(quiet_moves) {
-                let candidate = MoveSquares {
-                    from: piece.square,
-                    to: square,
-                    promote: None,
-                };
-                if self.check_move_unchecked(gen, slide, candidate) {
-                    res.push(Move {
-                        from: piece.square,
-                        to: square,
-                        move_type: MoveType::Quiet,
-                    })
-                }
-            }
-            let possible_captures = bit_set::difference(friends, gen.get_attacks(&piece));
+
+            let possible_captures = gen.get_attacks(&piece);
             let captures = bit_set::intersect(enemies, possible_captures);
-            for square in bit_set::iter_pos(captures) {
-                let candidate = MoveSquares {
-                    from: piece.square,
-                    to: square,
-                    promote: None,
-                };
-                if self.check_move_unchecked(gen, slide, candidate) {
-                    res.push(Move {
+
+            for &promote in Self::generate_promotions(&piece){
+                for square in bit_set::iter_pos(quiet_moves) {
+                    let candidate = MoveSquares {
                         from: piece.square,
                         to: square,
-                        move_type: MoveType::Capture(self.mailbox.get(square).unwrap().piece)
-                    })
+                        promote,
+                    };
+                    
+                    if self.check_move_unchecked(gen, slide, candidate) {
+                        res.push(Move {
+                            from: piece.square,
+                            to: square,
+                            move_type: match promote {
+                                None => MoveType::Quiet,
+                                Some(p) => MoveType::Promotion(p),
+                            },
+                        })
+                    }
+                }
+                
+                for square in bit_set::iter_pos(captures) {
+                    let candidate = MoveSquares {
+                        from: piece.square,
+                        to: square,
+                        promote,
+                    };
+                    if self.check_move_unchecked(gen, slide, candidate) {
+                        res.push(Move {
+                            from: piece.square,
+                            to: square,
+                            move_type: match promote {
+                                None => MoveType::Capture(self.mailbox.get(square).unwrap().piece),
+                                Some(p) => MoveType::CaptureAndPromotion(self.mailbox.get(square).unwrap().piece, p)
+                            }
+                        })
+                    }
                 }
             }
-            if let Some(ept) = self.en_passant_target {
-                let possible_en_passants = gen.get_attacks(&SpecefiedPiece{
-                    player: self.active.invert(),
-                    square: ept,
+        }
+        if let Some(ept) = self.en_passant_target {
+            let possible_en_passants = gen.get_attacks(&SpecefiedPiece{
+                player: self.active.invert(),
+                square: ept,
+                piece: Piece::Pawn,
+            });
+            let en_passant_pawns = bit_set::intersect(possible_en_passants, self.get_set(self.active, Piece::Pawn));
+            for square in bit_set::iter_pos(en_passant_pawns) {
+
+                for &promote in Self::generate_promotions(&SpecefiedPiece{
+                    player: self.active,
                     piece: Piece::Pawn,
-                });
-                let en_passant_pawns = bit_set::intersect(possible_en_passants, self.get_set(self.active, Piece::Pawn));
-                for square in bit_set::iter_pos(en_passant_pawns) {
+                    square,
+
+                }) {
                     if self.check_en_passant(gen, slide, MoveSquares {
                         to: ept,
                         from: square,
-                        promote: None,
+                        promote,
                     }) {
                         res.push(Move {
                             to: ept,
@@ -447,13 +688,23 @@ impl Board {
                         })
                     }
                 }
+                
             }
         }
+        self.lost_castle_rights[self.active.index()].get_rights().iter().for_each(|side| {
+            if self.check_castle(gen, slide, side) {
+                res.push(Move {
+                    from: self.king_pos(self.active),
+                    to: Self::get_castle_square(self.active, side),
+                    move_type: MoveType::Castle(*side)
+                })
+            }
+        });
         res
     }
 
     //DOES NOT CHECK IF MOVE IS LEGAL, panics if an empty square is moved.
-    pub fn make_move(&mut self, m: &MoveSquares) {
+    pub fn make_move(&mut self, m: &Move) {
         let piece = match self.mailbox.get(m.from) {
             Some(n) => n,
             None => {panic!("move {:?} attempted, but no piece is on {}", m, m.from);}
@@ -461,25 +712,87 @@ impl Board {
         let set = self.get_set_mut(piece.player, piece.piece);
         bit_set::unset(set, m.from);
         bit_set::set(set, m.to);
-        let capture = match self.mailbox.force_move(m) {
-            Some(cap) => {
-                let set = self.get_set_mut(cap.player, cap.piece);
-                bit_set::unset(set, m.to);
-                true
+        match m.move_type {
+            MoveType::Capture(piece) => {
+                if let Piece::King = piece {
+                    self.show();
+                    println!("{:?}", m);
+                    panic!("King can be captured!");
+                }
+                match self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: None }) {
+                    Some(cap) => {
+                        let set = self.get_set_mut(cap.player, cap.piece);
+                        bit_set::unset(set, m.to);
+                        true
+                    },
+                    None => panic!("move failed, no piece to capture"),
+                };
+                self.last_irreversable = self.half_move;
             },
-            None => false,
-        };
-
-
-        self.en_passant_target = None;
-        if capture {
-            self.last_irreversable = self.half_move;
-        }
-        else if Piece::Pawn == piece.piece {
-            self.last_irreversable = self.half_move;
-            if (rank(m.to) as i32 - rank(m.from) as i32).abs() == 2 {
-                self.en_passant_target = Some( (m.to + m.from) / 2 ); //really stupid to do it like this
+            MoveType::EnPassent => {
+                self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: None });
+                let square = adjust_square(m.to, 0, -self.active.pawn_dir(1));
+                self.mailbox.set(square, None, self.active.invert());
+                bit_set::unset(self.get_set_mut(self.active.invert(), Piece::Pawn), square);
             }
+            MoveType::Quiet => {
+                self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: None });
+            }
+            MoveType::Castle(side) => {
+                let rook_square = Self::get_castle_rook(self.active, &side);
+                self.mailbox.force_move(&MoveSquares{from: m.from, to: m.to, promote: None});
+                let to = (m.from + m.to) / 2;
+                self.mailbox.force_move(&MoveSquares{
+                    from: rook_square,
+                    to,
+                    promote: None,
+                });
+                bit_set::unset(self.get_set_mut(self.active, Piece::Rook), rook_square);
+                bit_set::set(self.get_set_mut(self.active, Piece::Rook), to);
+            },
+            MoveType::Promotion(promote) => {
+                bit_set::unset(self.get_set_mut(self.active, Piece::Pawn), m.to);
+                bit_set::set(self.get_set_mut(self.active, promote), m.to);
+                self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: Some(promote) });
+            }
+            MoveType::CaptureAndPromotion(piece, promote) => {
+                bit_set::unset(self.get_set_mut(self.active, Piece::Pawn), m.to);
+                bit_set::set(self.get_set_mut(self.active, promote), m.to);
+                match self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: Some(promote) }) {
+                    Some(cap) => {
+                        let set = self.get_set_mut(cap.player, cap.piece);
+                        bit_set::unset(set, m.to);
+                        true
+                    },
+                    None => panic!("move failed, no piece to capture"),
+                };
+                self.last_irreversable = self.half_move;
+            }
+            _ => {
+                panic!("not implimented yet")
+            }
+        }
+            
+        self.en_passant_target = None;
+        match piece.piece{
+            Piece::Pawn => {
+                self.last_irreversable = self.half_move;
+                if (rank(m.to) as i32 - rank(m.from) as i32).abs() == 2 {
+                    self.en_passant_target = Some( (m.to + m.from) / 2 ); //really stupid to do it like this
+                }
+            }
+            Piece::King => {
+                self.lost_castle_rights[self.active.index()].lose(CastleRights::Both)
+            },
+            Piece::Rook => {
+                if m.from == Self::get_castle_rook(self.active, &CastleType::KingSide) {
+                    self.lost_castle_rights[self.active.index()].lose(CastleRights::KingSide);
+                }
+                else if m.from == Self::get_castle_rook(self.active, &CastleType::QueenSide) {
+                    self.lost_castle_rights[self.active.index()].lose(CastleRights::QueenSide);
+                }
+            }
+            _ => (),
         }
         self.half_move += 1;
         self.active = self.active.invert();
@@ -507,18 +820,49 @@ impl Board {
                     target.to == m.to && target.from == m.from
                 } ) {
                     Some(m) => {
-                        self.make_move(&MoveSquares {
-                            from: m.from,
-                            to: m.to,
-                            promote: None,
-                        })
+                        self.make_move(&m)
                     }
-                    None => {println!("Invalid Move (not in psuedolegal moves)"); continue;}
+                    None => {
+                        bit_set::show(self.cache.as_ref().unwrap().pinned);
+                        bit_set::show(self.cache.as_ref().unwrap().pinners);
+                        println!("Invalid Move (not in psuedolegal moves)"); 
+                        continue;
+                    }
                 }
                 break;
             }
             
         }
+    }
+
+    fn perft_impl(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks)-> usize {
+        if n == 0 {
+            return 1;
+        }
+        let mut res = 0;
+        let moves = self.generate_legal(gen, slide);
+        for m in &moves {
+            let mut b = self.clone();
+            b.make_move(m);
+            res += b.perft_impl(n - 1, gen, slide);
+        };
+        res
+    }
+
+    pub fn perft(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> usize {
+        if n == 0 {
+            return 1;
+        }
+        let mut res = 0;
+        let moves = self.generate_legal(gen, slide);
+        for m in &moves {
+            let mut b = self.clone();
+            b.make_move(m);
+            let res2 = b.perft_impl(n - 1, gen, slide);
+            println!("{}{}: {}", pretty_square(m.from), pretty_square(m.to), res2);
+            res += res2;
+        };
+        res
     }
 }
 impl Mailbox {
@@ -551,12 +895,20 @@ impl Mailbox {
         let MailboxPiece {piece, player} = self.squares[square as usize]?;
         Some(SpecefiedPiece {piece, player, square})
     }
-
+    pub fn set(&mut self, square: u8, piece: Option<Piece>, player: Player) {
+        self.squares[square as usize] = (|| {
+            let piece = piece?;
+            Some(MailboxPiece {
+                piece,
+                player,
+            })
+        })()
+    }
     pub fn force_move(&mut self, m: &MoveSquares) -> Option<SpecefiedPiece> {
         let t = self.get(m.from)?;
         self.squares[m.from as usize] = None;
         let res = self.get(m.to);
-        self.squares[m.to as usize] = Some(MailboxPiece {piece: t.piece, player: t.player});
+        self.squares[m.to as usize] = Some(MailboxPiece {piece: m.promote.unwrap_or(t.piece), player: t.player});
         res   
     }
 
@@ -587,7 +939,7 @@ impl<'a> Iterator for MailboxIter<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::chess::board::adjust_square;
+    use crate::chess::board::{Board, adjust_square};
 
     #[test]
     fn file_and_rank() {
@@ -595,4 +947,15 @@ mod test {
         assert!( super::rank(32u8) == 4);
         assert!(adjust_square(28, 1, 1) == 37);
     }
+
+    #[test]
+    fn get_square_attackers() {
+        let gen = super::PossibleMoveGenerator::new();
+        let b = Board::from_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - ");
+        let square = super::adjust_square(0, 2, 3);
+        let attackers = b.get_square_attackers(square, &gen);
+        println!("{} {attackers}", super::pretty_square(square));
+        assert!(attackers == 0x80080000)
+    }
+
 }

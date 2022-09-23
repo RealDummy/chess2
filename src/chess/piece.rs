@@ -16,6 +16,12 @@ impl Player {
             Player::Black => Player::White,
         }
     }
+    pub fn pawn_dir(&self, n: i32) -> i32 {
+        n * match self {
+            Self::White => -1,
+            Self::Black => 1,
+        }
+    }
     pub fn iter() -> impl Iterator<Item = Player> {
         [Player::White, Player::Black].iter().copied()
     }
