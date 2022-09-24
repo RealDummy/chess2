@@ -12,12 +12,22 @@ enum Command {
     ShowFen,
 }
 
-fn get_user_input() -> String {
+fn get_user_input() -> Option<String> {
     let mut res = String::new();
-    if let Err(e) = io::stdin().read_line(&mut res) {
-        eprintln!("Error reading input: {e}");
+    match io::stdin().read_line(&mut res) {
+        Ok(bytes) => {
+            if bytes == 0 {
+                None
+            }
+            else {
+                Some(res)
+            }
+        }
+        Err(e) =>{
+            eprintln!("Error reading input: {e}");
+            None
+        }
     }
-    res
 }
 fn transform_input(input: String) -> Result<Command, String> {
     let mut chiter = input.trim().chars().map(|c| c.to_ascii_lowercase());
@@ -62,7 +72,10 @@ fn main() {
     };
     game.show();
     loop {
-        let user_input = get_user_input();
+        let user_input = match get_user_input() {
+            Some(n) => n,
+            None => {break;}
+        };
         let command = match transform_input(user_input) {
             Ok(c) => c,
             Err(msg) => {
