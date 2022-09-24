@@ -371,7 +371,7 @@ impl SliderMasks {
 mod test {
     use crate::chess::piece::{SpecefiedPiece, Player, Piece};
 
-    use super::{PossibleMoveGenerator, SliderMasks, bit_set};
+    use super::{PossibleMoveGenerator, SliderMasks};
     #[test]
     fn test() {
         let gen = PossibleMoveGenerator::new();

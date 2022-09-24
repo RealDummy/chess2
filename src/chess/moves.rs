@@ -1,6 +1,6 @@
 use crate::chess::piece::Piece;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum MoveType {
     Quiet,
     Capture(Piece),
@@ -16,7 +16,7 @@ pub struct MoveSquares {
     pub to: u8,
     pub promote: Option<Piece>,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Move {
     pub from: u8,
     pub to: u8,

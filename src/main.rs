@@ -1,37 +1,116 @@
 mod chess;
-use chess::{
-    board::{self, Board},
-    piece::{Player, Piece},
-    bit_set,
-    bit_set::{
-        Set
-    },
-    input,
-    generator::{PossibleMoveGenerator, SliderMasks},
-
-
-};
-use std::env;
+use std::{env};
+use chess::MoveResult;
 use log4rs;
+use std::io;
+
+enum Command {
+    Perft(u32),
+    Move(String),
+    Fen(String),
+    Show,
+    ShowFen,
+}
+
+fn get_user_input() -> String {
+    let mut res = String::new();
+    if let Err(e) = io::stdin().read_line(&mut res) {
+        eprintln!("Error reading input: {e}");
+    }
+    res
+}
+fn transform_input(input: String) -> Result<Command, String> {
+    let mut chiter = input.trim().chars().map(|c| c.to_ascii_lowercase());
+    let command: String = chiter.by_ref().take_while(|c| {
+        !c.is_whitespace()
+    }).collect();
+    let args: String = chiter.collect();
+    match command.as_str() {
+        "perft" => {
+            let n = match u32::from_str_radix(&args, 10) {
+                Ok(n) => n,
+                Err(_) => {return Err(format!("Invalid perft depth: {args}"))}
+            };
+            Ok(Command::Perft(n))
+        },
+        "fen" => {
+            match args.as_str() {
+                "show" => Ok(Command::ShowFen),
+                _ => Ok(Command::Fen(args)),
+            }
+        },
+        "show" => {
+            Ok(Command::Show)
+        },
+        _ => {
+            Ok(Command::Move(command))
+        }
+    }
+
+}
 fn main() {
-    std::fs::remove_file("/Users/samwortzman/Documents/code/rust/chess2/logs/log.log");
-    if let Err(e) =  log4rs::init_file("/Users/samwortzman/Documents/code/rust/chess2/log4rs.yml", Default::default()) {
+    if let Err(e) =  log4rs::init_file("./log4rs.yml", Default::default()) {
         panic!("{}", e);
     }
-    //let mut b = Board::new();
-    //let mut b = Board::from_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - ");
-    //let mut b = Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - ");
     let args: Vec::<String> = env::args().collect();
     let fen = args.get(1);
-    let mut b = match fen {
-        Some(f) => Board::from_fen(f),
-        None => Board::new(),
+    let mut game = match fen {
+        Some(f) => {
+            chess::Game::from_fen(f)
+        },
+        None => chess::Game::new()
     };
-    let depth = args.get(2);
-    let depth = match depth {
-        Some(d) => u32::from_str_radix(d, 10).ok().unwrap_or(6),
-        None => 6,
-    }; 
-    println!("nodes searched: {:?}", b.perft(depth, &PossibleMoveGenerator::new(), &SliderMasks::new()));
-    //b.shitty_play();
+    game.show();
+    loop {
+        let user_input = get_user_input();
+        let command = match transform_input(user_input) {
+            Ok(c) => c,
+            Err(msg) => {
+                eprintln!("{msg}");
+                continue;
+            }
+        };
+        match command {
+            Command::Perft(n) => {
+                game.perft(n);
+            },
+            Command::Move(m) => {
+                match game.try_move(&m) {
+                    MoveResult::Win => {
+                        println!("Checkmate! {} wins", match game.active_player() {
+                            chess::Player::Black => "Black",
+                            chess::Player::White => "White",
+                        });
+                        break;
+                    },
+                    MoveResult::Draw => {
+                        println!("Stalemate! It's a draw");
+                        break;
+                    },
+                    MoveResult::NextTurn => {
+                        game.show();
+                    },
+                    MoveResult::InvalidInput => {
+                        eprintln!("Invalid move, use UCI move notation (file)(rank)(file)(rank)[promote to]");
+                        continue;
+                    },
+                    MoveResult::InvalidMove => {
+                        println!("Illegal move!");
+                        continue;
+                    },
+
+                }
+            },
+            Command::Fen(fen) => {
+                game = chess::Game::from_fen(&fen);
+            },
+            Command::ShowFen => {
+                println!("Fen: {}", game.fen())
+            }
+            Command::Show => {
+                game.show();
+            }
+        }
+    }
 }
+

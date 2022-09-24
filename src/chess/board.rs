@@ -2,14 +2,14 @@ use std::convert::TryInto;
 use std::slice::Iter;
 use std::vec::Vec;
 
-use super::input::{self, get_square};
+use super::input::{get_square};
 use crate::chess::piece::{Piece, BLACK_START, WHITE_START, Player, SpecefiedPiece};
 use crate::chess::bit_set;
 pub use super::moves::{Move, MoveType, MoveSquares, CastleType};
 use super::generator::{PossibleMoveGenerator, SliderMasks};
 use bit_set::Set;
 use termion::{color};
-use log::{info};
+
 
 pub fn file<N: Into<usize> + Copy + std::ops::Div + TryFrom<usize>>(square: N) -> N {
     (square.into() % 8).try_into().ok().unwrap()
@@ -133,6 +133,7 @@ struct MailboxPiece {
 #[derive(Clone)]
 struct Mailbox {
     squares: [Option<MailboxPiece>; 65] //not a typo, 0 has 64 trailing 0's, so squares[64] should be None always!
+    //0 having 64 trailing 0's means an empty set's least significant bit (lsb) is 64
 }
 
 impl Board {
@@ -227,9 +228,13 @@ impl Board {
         black_castle_rights = LostCastleRights(black_castle_rights.get_rights());
         white_castle_rights = LostCastleRights(white_castle_rights.get_rights());
 
-        let ept = match get_square(&chiter.as_str()[0..2]) {
+
+        let ept_str: String = chiter.by_ref().take_while(|&c| {
+            c.is_ascii_alphanumeric() || c == '-'
+        }).collect();
+        let ept = match get_square(&ept_str) {
             Ok(s) => Some(s),
-            Err(e) => {None}
+            Err(_) => {None}
         };
 
         chiter.any(|c| c == ' ');
@@ -259,6 +264,11 @@ impl Board {
         &mut self.pieces[player.index()][piece.index()]
     }
     
+    pub fn to_fen(&self) -> String {
+        todo!()
+    }
+
+    #[allow(unused)]
     fn fmv(&self, from: u8, to: u8, promote: Option<Piece>) -> String {
         let res = match promote {
             None => format!("{}{}({})",pretty_square(from), pretty_square(to), self.half_move),
@@ -268,7 +278,7 @@ impl Board {
         
     }
 
-    fn draw_board(buffer: &[char; 64], player: Player) {
+    fn draw_board(buffer: &[char; 64], player: Player, last_move: Option<u8>) {
         println!("{}  ┏━━━━━━━━━━━━━━━━━━━━━━━━┓", color::Fg(color::White));
         let square_iter  = match player {
             Player::White => [0,1,2,3,4,5,6,7],
@@ -289,12 +299,17 @@ impl Board {
             print!("{} ┃", rank);
             for j in square_iter.clone() {
                 let is_black = (i%2)^(j%2) == 1;
+                let square = (i*8 + j) as u8;
                 let spot = buffer[(i*8 + j) as usize];
+                let highlight = match last_move {
+                    Some(n) =>if n == square {'|'} else {' '},
+                    None => ' ',
+                };
                 if is_black {
-                    print!("{}{} {} ", color::Bg(color::Black),color::Fg(color::White), spot)
+                    print!("{}{}{highlight}{}{highlight}", color::Bg(color::Black),color::Fg(color::White), spot)
                 }
                 else {
-                    print!("{}{} {} ", color::Bg(color::LightBlack),color::Fg(color::White), spot)
+                    print!("{}{}{highlight}{}{highlight}", color::Bg(color::LightBlack),color::Fg(color::White), spot)
                 }
             }
             println!("{}┃",color::Bg(color::Reset));
@@ -307,32 +322,12 @@ impl Board {
             println!("    H  G  F  E  D  C  B  A ")
         }
     }
-    pub fn show(&self) {
+    pub fn show(&self, last_move: Option<u8>) {
         let mut buffer = [' '; 64];
         for p in self.mailbox.iter() {  
             buffer[p.square as usize] = p.piece.get_char(p.player);
         }
-        Board::draw_board(&buffer, self.active);
-    }
-    pub fn force_move(&mut self, m: MoveSquares, gen: &PossibleMoveGenerator) -> bool {
-        let p = match self.mailbox.get(m.from) {
-            Some(n) => n,
-            None => {return false},
-        };
-        let moves = bit_set::union(gen.get_moves(&p), gen.get_attacks(&p));
-        if bit_set::get(moves, m.to) == 0 {
-            return false;
-        }
-        let set = self.get_set_mut(p.player, p.piece);
-        bit_set::unset(set, m.from);
-        bit_set::set(set, m.to);
-        match self.mailbox.force_move(&m) {
-            Some(p) => {
-                bit_set::unset(self.get_set_mut(self.active.invert(), p.piece), p.square)
-            },
-            None => ()
-        }
-        true
+        Board::draw_board(&buffer, self.active, last_move);
     }
     fn get_square_attackers(&self, square: u8, gen: &PossibleMoveGenerator) -> Set {
         Piece::iter().fold(0, |a,piece| {
@@ -385,17 +380,11 @@ impl Board {
         });
     }
 
-    pub fn check_move(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks, candidate: MoveSquares) -> bool {
-        if let None = self.cache {
-            self.create_cache(gen, slide);
-        }
-        self.check_move_unchecked(gen, slide, candidate)
-    }
     fn king_pos(&self, player: Player) -> u8 {
         bit_set::lsb_pos(self.get_set(player, Piece::King))
     }
 
-    fn check_en_passant(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks, candidate: MoveSquares) -> bool {
+    fn check_en_passant(&self, slide: &SliderMasks, candidate: MoveSquares) -> bool {
         let enemy_pawn = adjust_square(candidate.to, 0, match self.active {
             Player::White => 1,
             Player::Black => -1,
@@ -406,9 +395,9 @@ impl Board {
         let king_pos = self.king_pos(self.active);
         //check for checks
         let checks = self.cache.as_ref().unwrap().check;
-        let target_check = bit_set::intersect(checks, 1u64 << enemy_pawn);
+        let target_check = bit_set::intersect(checks, bit_set::from_idx(enemy_pawn));
 
-        if bit_set::intersect(1 << candidate.from, self.cache.as_ref().unwrap().pinned) != 0 {
+        if bit_set::intersect(bit_set::from_idx(candidate.from), self.cache.as_ref().unwrap().pinned) != 0 {
             return false;
         }
 
@@ -426,7 +415,7 @@ impl Board {
             let rank_mask = 0xFFu64 << 8 * rank(enemy_pawn);
             let problems = bit_set::intersect(rank_mask, rnq);
             let blockers = [enemy_pawn, candidate.from].iter().fold(self.cache.as_ref().unwrap().all_pieces, |a, &x| {
-                bit_set::difference(1u64 << x, a)
+                bit_set::difference(bit_set::from_idx(x), a)
             });
             let pinned = bit_set::iter_pos(problems).any(|x| {
                 bit_set::intersect(blockers, slide.get(king_pos, x)) == 0
@@ -437,7 +426,6 @@ impl Board {
         }
         true
     }
-
     fn check_castle(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks, side: &CastleType) -> bool {
         let check = self.cache.as_ref().unwrap().check;
         if check != 0 {
@@ -491,9 +479,9 @@ impl Board {
             ..
         } = self.cache.as_ref().unwrap().clone();
         let square = candidate.from;
-        let ss = 1u64 << square;
+        let ss = bit_set::from_idx(square);
         let new_square = candidate.to;
-        let nss = 1u64 << new_square;
+        let nss = bit_set::from_idx(new_square);
         let piece = match self.mailbox.get(square) {
             Some(n) => n,
             None => {
@@ -516,7 +504,7 @@ impl Board {
             if bit_set::iter_pos(pinners).any(|pinner|{ //for each pinner, check if any
                 bit_set::intersect( //new move doesnt intersect with pinner attack
                     bit_set::union(
-                        1u64 << pinner, 
+                        bit_set::from_idx(pinner), 
                         slide.get(pinner, king_pos)
                     ),
                     nss
@@ -535,7 +523,7 @@ impl Board {
                 let new_attackers = self.get_square_attackers(new_square, gen);
                 let is_attacked = bit_set::iter_pos(new_attackers).any(|attacker_pos|{
                     let attack = slide.get(new_square, attacker_pos);
-                    let blockers = bit_set::intersect(bit_set::difference(1 << piece.square, all_pieces), attack);
+                    let blockers = bit_set::intersect(bit_set::difference(bit_set::from_idx(piece.square), all_pieces), attack);
                     bit_set::count(blockers) == 0
                 });
                 if is_attacked {
@@ -548,7 +536,7 @@ impl Board {
                     let resolved_checks = bit_set::iter_pos(check).all(|check_pos| {
                         let attack = slide.get(king_pos, check_pos);
                         let block = bit_set::intersect(attack, nss);
-                        let capture = bit_set::intersect(nss, 1u64 << check_pos);
+                        let capture = bit_set::intersect(nss, bit_set::from_idx(check_pos));
                         capture != 0 || block != 0
                     });
                     if !resolved_checks {
@@ -608,9 +596,14 @@ impl Board {
             _ => [None].iter(),
         }
     }
+
+    pub fn active_player(&self) -> Player {
+        self.active
+    }
+
     pub fn generate_legal(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
         ////info!("---starting generation for half move {}----", self.half_move);
-        let mut res: Vec<Move> =vec![];
+        let mut res: Vec<Move> =Vec::with_capacity(10);
         self.create_cache(gen, slide);
         let enemies = self.cache.as_ref().unwrap().enemies;
         let friends = self.cache.as_ref().unwrap().friends;
@@ -676,7 +669,7 @@ impl Board {
                     square,
 
                 }) {
-                    if self.check_en_passant(gen, slide, MoveSquares {
+                    if self.check_en_passant(slide, MoveSquares {
                         to: ept,
                         from: square,
                         promote,
@@ -703,7 +696,7 @@ impl Board {
         res
     }
 
-    //DOES NOT CHECK IF MOVE IS LEGAL, panics if an empty square is moved.
+    // DOES NOT CHECK IF MOVE IS LEGAL, panics if an empty square is moved.
     pub fn make_move(&mut self, m: &Move) {
         let piece = match self.mailbox.get(m.from) {
             Some(n) => n,
@@ -715,7 +708,6 @@ impl Board {
         match m.move_type {
             MoveType::Capture(piece) => {
                 if let Piece::King = piece {
-                    self.show();
                     println!("{:?}", m);
                     panic!("King can be captured!");
                 }
@@ -755,7 +747,7 @@ impl Board {
                 bit_set::set(self.get_set_mut(self.active, promote), m.to);
                 self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: Some(promote) });
             }
-            MoveType::CaptureAndPromotion(piece, promote) => {
+            MoveType::CaptureAndPromotion(_, promote) => {
                 bit_set::unset(self.get_set_mut(self.active, Piece::Pawn), m.to);
                 bit_set::set(self.get_set_mut(self.active, promote), m.to);
                 match self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: Some(promote) }) {
@@ -767,9 +759,6 @@ impl Board {
                     None => panic!("move failed, no piece to capture"),
                 };
                 self.last_irreversable = self.half_move;
-            }
-            _ => {
-                panic!("not implimented yet")
             }
         }
             
@@ -798,44 +787,8 @@ impl Board {
         self.active = self.active.invert();
     }
 
-    pub fn shitty_play(&mut self) {
-        let gen = PossibleMoveGenerator::new();
-        let slide = SliderMasks::new();
-        loop {
-            let psudo_moves = self.generate_legal(&gen, &slide);
-            if psudo_moves.len() == 0 {
-                println!("Checkmate or draw!");
-            }
-            self.show();
-            loop {
-                let s = input::get_input();
-                let m = match input::read_uci(&s) {
-                    Err(msg) => {
-                        eprintln!("{}", msg);
-                        continue;
-                    }
-                    Ok(m) => m,
-                };
-                match psudo_moves.iter().find(|&target| {
-                    target.to == m.to && target.from == m.from
-                } ) {
-                    Some(m) => {
-                        self.make_move(&m)
-                    }
-                    None => {
-                        bit_set::show(self.cache.as_ref().unwrap().pinned);
-                        bit_set::show(self.cache.as_ref().unwrap().pinners);
-                        println!("Invalid Move (not in psuedolegal moves)"); 
-                        continue;
-                    }
-                }
-                break;
-            }
-            
-        }
-    }
 
-    fn perft_impl(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks)-> usize {
+    fn perft_impl(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks)-> u64 {
         if n == 0 {
             return 1;
         }
@@ -849,20 +802,37 @@ impl Board {
         res
     }
 
-    pub fn perft(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> usize {
+    pub fn perft(&self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> u64 {
         if n == 0 {
             return 1;
         }
         let mut res = 0;
-        let moves = self.generate_legal(gen, slide);
+        let mut copy = self.clone();
+        let moves = copy.generate_legal(gen, slide);
         for m in &moves {
-            let mut b = self.clone();
+            let mut b = copy.clone();
             b.make_move(m);
             let res2 = b.perft_impl(n - 1, gen, slide);
             println!("{}{}: {}", pretty_square(m.from), pretty_square(m.to), res2);
             res += res2;
         };
         res
+    }
+    pub fn in_check(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> bool {
+        match &self.cache {
+            None => {
+                self.create_cache(gen, slide);
+                if let Some(cache) = self.cache.as_ref() {
+                    cache.check != 0
+                }
+                else { //unreachable code
+                    false
+                }
+            },
+            Some(cache) => {
+                cache.check != 0
+            }
+        }
     }
 }
 impl Mailbox {
@@ -939,7 +909,7 @@ impl<'a> Iterator for MailboxIter<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::chess::board::{Board, adjust_square};
+    use crate::chess::{board::{Board, adjust_square}, generator::{PossibleMoveGenerator, SliderMasks}};
 
     #[test]
     fn file_and_rank() {
@@ -947,7 +917,6 @@ mod test {
         assert!( super::rank(32u8) == 4);
         assert!(adjust_square(28, 1, 1) == 37);
     }
-
     #[test]
     fn get_square_attackers() {
         let gen = super::PossibleMoveGenerator::new();
@@ -957,5 +926,38 @@ mod test {
         println!("{} {attackers}", super::pretty_square(square));
         assert!(attackers == 0x80080000)
     }
-
+    #[test]
+    fn perft() {
+        let depth = 4;
+        let positions = [
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1 ", 
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - ",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - ",
+            "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+            "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8  ",
+            "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10"
+        ];
+        let _nodes_5 = [ 
+            4865609,
+            193690690,
+            674624,
+            15833292,
+            89941194,
+            164075551,
+        ];
+        let nodes_4 = [
+            197281 ,
+            4085603 ,
+            43238,
+            422333,
+            2103487,
+            3894594,
+        ];
+        let gen = PossibleMoveGenerator::new();
+        let slide = SliderMasks::new();
+        for (fen, nodes) in positions.iter().zip(nodes_4) {
+            let b = Board::from_fen(fen);
+            assert!(b.perft(depth, &gen, &slide) == nodes);
+        }
+    }
 }

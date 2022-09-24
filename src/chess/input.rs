@@ -71,18 +71,6 @@ pub fn read_uci(uci: &str) -> Result<moves::MoveSquares, String> {
     })
 }
 
-pub fn get_input() -> String {
-    let mut res = String::new();
-    loop {
-        if let Err(msg) =  std::io::stdin().read_line(&mut res) {
-            eprintln!("Can't read input: {}", msg);
-            continue;
-        }
-        break;
-    }
-    res
-}
-
 #[cfg(test)]
 mod tests {
     use crate::chess::{moves::MoveSquares, piece::Piece};

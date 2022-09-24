@@ -5,6 +5,6 @@
       encoder:
         pattern: "{L}: {m}\n"
   
-#  root:
-#    appenders: 
-#      - stdout
+  root:
+    appenders: 
+      - stdout

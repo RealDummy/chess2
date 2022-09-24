@@ -8,8 +8,8 @@ pub fn intersect(a: Set, b: Set) -> Set {
     a & b
 }
 
-pub fn inverse(a:Set) -> Set {
-    !a
+pub fn from_idx(a: u8) -> Set {
+    1 << a
 }
 
 pub fn difference(mask:Set, image:Set) -> Set {
@@ -60,6 +60,7 @@ pub fn iter_pos(set: Set) -> SetPosIter {
     }
 }
 
+#[allow(unused)]
 pub fn show(a: Set) {
     println!("{}", a);
     println!("{}  ┏━━━━━━━━━━━━━━━━━━━━━━━━┓", color::Fg(color::White));
