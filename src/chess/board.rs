@@ -603,7 +603,7 @@ impl Board {
 
     pub fn generate_legal(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
         ////info!("---starting generation for half move {}----", self.half_move);
-        let mut res: Vec<Move> =Vec::with_capacity(10);
+        let mut res: Vec<Move> = Vec::new();
         self.create_cache(gen, slide);
         let enemies = self.cache.as_ref().unwrap().enemies;
         let friends = self.cache.as_ref().unwrap().friends;
@@ -695,7 +695,66 @@ impl Board {
         });
         res
     }
+    pub fn generate_legal_captures(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
+        let mut res: Vec<Move> = Vec::new();
+        self.create_cache(gen, slide);
+        let enemies = self.cache.as_ref().unwrap().enemies;
+        for piece in self.mailbox.iter().filter(|p| p.player == self.active) {
 
+            let possible_captures = gen.get_attacks(&piece);
+            let captures = bit_set::intersect(enemies, possible_captures);
+
+            for &promote in Self::generate_promotions(&piece){
+                for square in bit_set::iter_pos(captures) {
+                    let candidate = MoveSquares {
+                        from: piece.square,
+                        to: square,
+                        promote,
+                    };
+                    if self.check_move_unchecked(gen, slide, candidate) {
+                        res.push(Move {
+                            from: piece.square,
+                            to: square,
+                            move_type: match promote {
+                                None => MoveType::Capture(self.mailbox.get(square).unwrap().piece),
+                                Some(p) => MoveType::CaptureAndPromotion(self.mailbox.get(square).unwrap().piece, p)
+                            }
+                        })
+                    }
+                }
+            }
+        }
+        if let Some(ept) = self.en_passant_target {
+            let possible_en_passants = gen.get_attacks(&SpecefiedPiece{
+                player: self.active.invert(),
+                square: ept,
+                piece: Piece::Pawn,
+            });
+            let en_passant_pawns = bit_set::intersect(possible_en_passants, self.get_set(self.active, Piece::Pawn));
+            for square in bit_set::iter_pos(en_passant_pawns) {
+
+                for &promote in Self::generate_promotions(&SpecefiedPiece{
+                    player: self.active,
+                    piece: Piece::Pawn,
+                    square,
+                }) {
+                    if self.check_en_passant(slide, MoveSquares {
+                        to: ept,
+                        from: square,
+                        promote,
+                    }) {
+                        res.push(Move {
+                            to: ept,
+                            from: square,
+                            move_type: MoveType::EnPassent,
+                        })
+                    }
+                }
+                
+            }
+        }
+        res
+    }
     // DOES NOT CHECK IF MOVE IS LEGAL, panics if an empty square is moved.
     pub fn make_move(&mut self, m: &Move) {
         let piece = match self.mailbox.get(m.from) {
@@ -787,6 +846,16 @@ impl Board {
         self.active = self.active.invert();
     }
 
+    pub fn eval(&self) -> f64 {
+        let piece_value = [1.0, 3.0, 3.0, 5.0, 9.0, 300.0];
+        let active_count = Piece::iter().fold(0.0, |a, p| {
+            bit_set::count(self.get_set(self.active, p)) as f64 * piece_value[p.index()] + a
+        });
+        let opp_count = Piece::iter().fold(0.0, |a, p| {
+            bit_set::count(self.get_set(self.active.invert(), p)) as f64 * piece_value[p.index()] + a
+        });
+        return active_count - opp_count;
+    }
 
     fn perft_impl(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks)-> u64 {
         if n == 0 {

@@ -30,10 +30,10 @@ fn get_user_input() -> Option<String> {
     }
 }
 fn transform_input(input: String) -> Result<Command, String> {
-    let mut chiter = input.trim().chars().map(|c| c.to_ascii_lowercase());
+    let mut chiter = input.trim().chars();
     let command: String = chiter.by_ref().take_while(|c| {
         !c.is_whitespace()
-    }).collect();
+    }).map(|c| c.to_ascii_lowercase()).collect();
     let args: String = chiter.collect();
     match command.as_str() {
         "perft" => {
@@ -71,6 +71,7 @@ fn main() {
         None => chess::Game::new()
     };
     game.show();
+    //println!("{}", game.eval(7));
     loop {
         let user_input = match get_user_input() {
             Some(n) => n,
@@ -88,11 +89,13 @@ fn main() {
                 game.perft(n);
             },
             Command::Move(m) => {
-                match game.try_move(&m) {
+                let mr = game.try_move(&m);
+                game.show();
+                match mr {
                     MoveResult::Win => {
                         println!("Checkmate! {} wins", match game.active_player() {
-                            chess::Player::Black => "Black",
-                            chess::Player::White => "White",
+                            chess::Player::Black => "White",
+                            chess::Player::White => "Black",
                         });
                         break;
                     },
@@ -101,7 +104,15 @@ fn main() {
                         break;
                     },
                     MoveResult::NextTurn => {
-                        game.show();
+                        //game.show();
+                        match game.active_player() {
+                            chess::Player::White => (),
+                            chess::Player::Black => {
+                                game.make_best_move();
+                                game.show();
+                            }
+                        }
+
                     },
                     MoveResult::InvalidInput => {
                         eprintln!("Invalid move, use UCI move notation (file)(rank)(file)(rank)[promote to]");

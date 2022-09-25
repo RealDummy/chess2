@@ -12,3 +12,6 @@ The program accepts up to one argument, a fen string for the starting position. 
 
 ## About
 Chess move validator.
+
+## Known problems / bugs
+probably doesn't work if fen position is checkmate.

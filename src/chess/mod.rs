@@ -17,7 +17,6 @@ use self::{board::{MoveType}, piece::Piece};
 pub struct Game {
     gen: PossibleMoveGenerator,
     slide: SliderMasks,
-    legal_moves: Option<Vec<Move>>,
     board: Board,
     last_move: Option<Move>
 }
@@ -35,7 +34,6 @@ impl Game {
         Self {
             gen: generator::PossibleMoveGenerator::new(),
             slide: SliderMasks::new(),
-            legal_moves: None,
             board: Board::new(),
             last_move: None,
         }
@@ -44,7 +42,6 @@ impl Game {
         Self {
             gen: generator::PossibleMoveGenerator::new(),
             slide: SliderMasks::new(),
-            legal_moves: None,
             board: Board::from_fen(fen),
             last_move: None,
         }
@@ -57,6 +54,16 @@ impl Game {
         println!("Nodes searched: {res}");
         res
     }
+
+    fn get_legal_moves<'a>(&'a mut self) -> Vec<Move> {
+        self.board.generate_legal(&self.gen, &self.slide)
+    }
+
+    fn make_move(&mut self, m: &Move) {
+        self.board.make_move(m);
+        self.last_move = Some(m.clone());   
+    }
+
     pub fn try_move(&mut self, try_move: &str) -> MoveResult {
         let input_move = match input::read_uci(try_move) {
             Ok(m) => m,
@@ -65,14 +72,7 @@ impl Game {
                 return MoveResult::InvalidInput
             }
         };
-        let valid_moves = match &self.legal_moves {
-            None => {
-                let lm = self.board.generate_legal(&self.gen, &self.slide);
-                self.legal_moves = Some(lm);
-                self.legal_moves.as_ref().unwrap()
-            }
-            Some(lm) => lm
-        };
+        let valid_moves = self.get_legal_moves();
         let found = valid_moves.iter().find(|&m| {
             m.to == input_move.to && 
             m.from == input_move.from &&
@@ -98,18 +98,82 @@ impl Game {
                 return MoveResult::InvalidMove;
             }
         };
-        self.board.make_move(&m);
-        self.last_move = Some(m);
-        let next_moves = self.board.generate_legal(&self.gen, &self.slide);
-        let res = match next_moves.len() {
+        self.make_move(&m);
+        //let next_moves = self.board.generate_legal(&self.gen, &self.slide);
+        let res = match self.get_legal_moves().len() {
             0 => match self.board.in_check(&self.gen, &self.slide) {
                 false => MoveResult::Draw,
                 true  => MoveResult::Win,
             }
             _ => MoveResult::NextTurn,
         };
-        self.legal_moves = Some(next_moves);
         res
+    }
+
+    fn quiesce(&self, mut board: Board, mut alpha: f64, beta: f64) -> f64 {
+        let standing_eval = board.eval();
+        if standing_eval >= beta {
+            return beta;
+        }
+        if alpha < standing_eval {
+            alpha = standing_eval;
+        }
+        for capture in board.generate_legal_captures(&self.gen, &self.slide) {
+            let mut b2 = board.clone();
+            b2.make_move(&capture);
+            let new_eval = -self.quiesce(b2, -beta, -alpha);
+            if new_eval >= beta {
+                return beta;
+            }
+            if new_eval > alpha {
+                alpha = new_eval;
+            }
+        }
+        alpha
+    }
+
+    fn alpha_beta(&self, mut board: Board, mut alpha: f64, beta: f64, depth_left: i32) -> f64 {
+        if depth_left == 0 {
+            return self.quiesce(board, alpha, beta);
+        }
+        for m in board.generate_legal(&self.gen, &self.slide) {
+            let mut b2 = board.clone();
+            b2.make_move(&m);
+            let score = -self.alpha_beta(b2, -beta, -alpha, depth_left - 1);
+            if score >= beta {
+                return beta;
+            }
+            if score > alpha {
+                alpha = score;
+            }
+        }
+        alpha
+    }
+    pub fn eval_pos(&mut self, depth: i32) -> f64 {
+        self.eval_impl(depth, self.board.clone())
+    }
+    pub fn root_search(&mut self, depth: i32) -> (Move, f64) {
+        assert!(depth >= 1);
+        let mut alpha = f64::NEG_INFINITY;
+        let mut best_move = None;
+        for m in self.board.generate_legal(&self.gen, &self.slide) {
+            let mut b2 = self.board.clone();
+            b2.make_move(&m);
+            let score = -self.alpha_beta(b2, f64::NEG_INFINITY, -alpha, depth - 1);
+            if score > alpha {
+                alpha = score;
+                best_move = Some(m);
+            }
+        }
+        (best_move.unwrap(), alpha)
+    }
+    fn eval_impl(&mut self, depth: i32, board: Board) -> f64 {
+        self.alpha_beta(board, f64::NEG_INFINITY, f64::INFINITY, depth)
+
+    }
+    pub fn make_best_move(&mut self) {
+        let (m, a) = self.root_search(6);
+        self.make_move(&m);
     }
     pub fn show(&self) {
         let square = match &self.last_move {
