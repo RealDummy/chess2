@@ -4,6 +4,9 @@ mod board;
 mod piece;
 mod input;
 mod generator;
+mod hash;
+
+use std::collections::HashMap;
 
 use generator::{
     PossibleMoveGenerator,
@@ -11,14 +14,17 @@ use generator::{
 };
 use board::Board;
 use moves::Move;
+use hash::{GameHasher};
 
 use self::{board::{MoveType}, piece::Piece};
-
+pub struct TNode {}
 pub struct Game {
     gen: PossibleMoveGenerator,
     slide: SliderMasks,
     board: Board,
-    last_move: Option<Move>
+    last_move: Option<Move>,
+    hasher: GameHasher,
+    table: HashMap<Board, TNode>,
 }
 
 pub enum MoveResult {
@@ -31,26 +37,32 @@ pub enum MoveResult {
 pub use piece::Player;
 impl Game {
     pub fn new() -> Self {
+        let hasher = GameHasher::new();
         Self {
             gen: generator::PossibleMoveGenerator::new(),
             slide: SliderMasks::new(),
-            board: Board::new(),
+            board: Board::new(&hasher),
             last_move: None,
+            hasher,
+            table: HashMap::new(),
         }
     }
     pub fn from_fen(fen: &str) -> Self {
+        let hasher = GameHasher::new();
         Self {
             gen: generator::PossibleMoveGenerator::new(),
             slide: SliderMasks::new(),
-            board: Board::from_fen(fen),
+            board: Board::from_fen(fen, &hasher),
             last_move: None,
+            hasher,
+            table: HashMap::new(),
         }
     }
     pub fn fen(&self) -> String {
         self.board.to_fen()
     }
     pub fn perft(&self, n: u32) -> u64 {
-        let res = self.board.perft(n, &self.gen, &self.slide);
+        let res = self.board.perft(n, &self.gen, &self.slide, &self.hasher);
         println!("Nodes searched: {res}");
         res
     }
@@ -60,7 +72,7 @@ impl Game {
     }
 
     fn make_move(&mut self, m: &Move) {
-        self.board.make_move(m);
+        self.board.make_move(m, &self.hasher);
         self.last_move = Some(m.clone());   
     }
 
@@ -120,7 +132,7 @@ impl Game {
         }
         for capture in board.generate_legal_captures(&self.gen, &self.slide) {
             let mut b2 = board.clone();
-            b2.make_move(&capture);
+            b2.make_move(&capture, &self.hasher);
             let new_eval = -self.quiesce(b2, -beta, -alpha);
             if new_eval >= beta {
                 return beta;
@@ -138,7 +150,7 @@ impl Game {
         }
         for m in board.generate_legal(&self.gen, &self.slide) {
             let mut b2 = board.clone();
-            b2.make_move(&m);
+            b2.make_move(&m, &self.hasher);
             let score = -self.alpha_beta(b2, -beta, -alpha, depth_left - 1);
             if score >= beta {
                 return beta;
@@ -158,7 +170,7 @@ impl Game {
         let mut best_move = None;
         for m in self.board.generate_legal(&self.gen, &self.slide) {
             let mut b2 = self.board.clone();
-            b2.make_move(&m);
+            b2.make_move(&m, &self.hasher);
             let score = -self.alpha_beta(b2, f64::NEG_INFINITY, -alpha, depth - 1);
             if score > alpha {
                 alpha = score;
@@ -172,7 +184,7 @@ impl Game {
 
     }
     pub fn make_best_move(&mut self) {
-        let (m, a) = self.root_search(6);
+        let (m, a) = self.root_search(5);
         self.make_move(&m);
     }
     pub fn show(&self) {

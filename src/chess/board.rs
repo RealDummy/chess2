@@ -7,6 +7,7 @@ use crate::chess::piece::{Piece, BLACK_START, WHITE_START, Player, SpecefiedPiec
 use crate::chess::bit_set;
 pub use super::moves::{Move, MoveType, MoveSquares, CastleType};
 use super::generator::{PossibleMoveGenerator, SliderMasks};
+use super::hash::{GameHasher, HashT};
 use bit_set::Set;
 use termion::{color};
 
@@ -29,9 +30,7 @@ fn pretty_rank(rank: u8) -> char {
 }
 fn pretty_square(square: u8) -> String {
     format!("{}{}", pretty_file(file(square)), pretty_rank(rank(square)))
-}   
-
-
+}
 
 pub fn adjust_square<N: TryInto<i32> + Copy + std::ops::Add + TryFrom<i32>>(square: N, file: i32, rank: i32) -> N {
    (square.try_into().ok().unwrap() + file + rank * 8).try_into().ok().unwrap()
@@ -94,8 +93,10 @@ impl LostCastleRights {
     pub fn get_rights(&self) -> CastleRights {
         self.0.invert()
     }
-    pub fn lose(&mut self, right: CastleRights) {
-        self.0 = (self.0 as u8 | right as u8).into()
+    pub fn lose(&mut self, right: CastleRights) -> CastleRights {
+        let lost_rights = !(self.0 as u8) & right as u8;
+        self.0 = (self.0 as u8 | right as u8).into();
+        lost_rights.into()
     }
 }
 
@@ -120,6 +121,7 @@ pub struct Board {
     last_irreversable: u32,
     cache: Option<MoveGenCache>,
     lost_castle_rights: [LostCastleRights; 2],
+    hash: HashT
 
 
 }
@@ -137,9 +139,9 @@ struct Mailbox {
 }
 
 impl Board {
-    pub fn new() -> Self{
+    pub fn new(hasher: &GameHasher) -> Self{
         let pieces = [WHITE_START.clone(), BLACK_START.clone()];
-        Board {
+        Self {
             pieces,
             active: Player::White,
             mailbox: Mailbox::from(pieces),
@@ -148,11 +150,12 @@ impl Board {
             last_irreversable: 0,
             cache: None,
             lost_castle_rights: [LostCastleRights(CastleRights::None), LostCastleRights(CastleRights::None)],
-        }
+            hash: 0
+        }.update_hash(hasher)
     }
-    pub fn empty() -> Self {
+    pub fn empty(hasher: &GameHasher) -> Self {
         let pieces = [[0;6];2];
-        Board {
+        Self {
             pieces,
             active: Player::White,
             mailbox: Mailbox::from(pieces),
@@ -160,11 +163,12 @@ impl Board {
             en_passant_target: None,
             last_irreversable: 0,
             cache: None,
-            lost_castle_rights: [LostCastleRights(CastleRights::None), LostCastleRights(CastleRights::None)],
-        }
+            lost_castle_rights: [LostCastleRights(CastleRights::Both), LostCastleRights(CastleRights::Both)],
+            hash: 0,
+        }.update_hash(hasher)
     }
-    pub fn from_fen(fen: &str) -> Self {
-        let mut board = Self::empty();
+    pub fn from_fen(fen: &str, hasher: &GameHasher) -> Self {
+        let mut board = Self::empty(hasher);
         let mut rank: i32 = 0;
         let mut file: i32 = 0;
         let mut chiter = fen.chars();
@@ -217,10 +221,10 @@ impl Board {
                 return true;
             }
             match c {
-                'q' => {black_castle_rights.lose(CastleRights::QueenSide)}
-                'k' => {black_castle_rights.lose(CastleRights::KingSide)},
-                'Q' => {white_castle_rights.lose(CastleRights::QueenSide)},
-                'K' => {white_castle_rights.lose(CastleRights::KingSide)},
+                'q' => {black_castle_rights.lose(CastleRights::QueenSide);}
+                'k' => {black_castle_rights.lose(CastleRights::KingSide);},
+                'Q' => {white_castle_rights.lose(CastleRights::QueenSide);},
+                'K' => {white_castle_rights.lose(CastleRights::KingSide);},
                 _ => (),
             }
             false
@@ -252,8 +256,9 @@ impl Board {
             half_move,
             last_irreversable,
             cache: None,
-            lost_castle_rights: [white_castle_rights, black_castle_rights]
-        }
+            lost_castle_rights: [white_castle_rights, black_castle_rights],
+            hash: 0,
+        }.update_hash(hasher)
 
     }
 
@@ -756,7 +761,7 @@ impl Board {
         res
     }
     // DOES NOT CHECK IF MOVE IS LEGAL, panics if an empty square is moved.
-    pub fn make_move(&mut self, m: &Move) {
+    pub fn make_move(&mut self, m: &Move, hasher: &GameHasher) {
         let piece = match self.mailbox.get(m.from) {
             Some(n) => n,
             None => {panic!("move {:?} attempted, but no piece is on {}", m, m.from);}
@@ -764,16 +769,28 @@ impl Board {
         let set = self.get_set_mut(piece.player, piece.piece);
         bit_set::unset(set, m.from);
         bit_set::set(set, m.to);
+
         match m.move_type {
-            MoveType::Capture(piece) => {
-                if let Piece::King = piece {
-                    println!("{:?}", m);
-                    panic!("King can be captured!");
-                }
+            MoveType::Capture(cap_piece) => {
+                // if let Piece::King = piece {
+                //     println!("{:?}", m);
+                //     panic!("King can be captured!");
+                // }
                 match self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: None }) {
                     Some(cap) => {
                         let set = self.get_set_mut(cap.player, cap.piece);
                         bit_set::unset(set, m.to);
+                        self.hash ^= hasher.get_piece(&cap);
+                        self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                            player: self.active,
+                            piece: piece.piece,
+                            square: m.from,
+                        });
+                        self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                            player: self.active,
+                            piece: piece.piece,
+                            square: m.to,
+                        });
                         true
                     },
                     None => panic!("move failed, no piece to capture"),
@@ -785,9 +802,38 @@ impl Board {
                 let square = adjust_square(m.to, 0, -self.active.pawn_dir(1));
                 self.mailbox.set(square, None, self.active.invert());
                 bit_set::unset(self.get_set_mut(self.active.invert(), Piece::Pawn), square);
+
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active.invert(),
+                    piece: piece.piece,
+                    square: square,
+                });
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: piece.piece,
+                    square: m.from,
+                });
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: piece.piece,
+                    square: m.to,
+                });
+
+
+
             }
             MoveType::Quiet => {
                 self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: None });
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: piece.piece,
+                    square: m.from,
+                });
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: piece.piece,
+                    square: m.to,
+                });
             }
             MoveType::Castle(side) => {
                 let rook_square = Self::get_castle_rook(self.active, &side);
@@ -800,11 +846,51 @@ impl Board {
                 });
                 bit_set::unset(self.get_set_mut(self.active, Piece::Rook), rook_square);
                 bit_set::set(self.get_set_mut(self.active, Piece::Rook), to);
+
+                //rook
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: Piece::Rook,
+                    square: rook_square,
+                });
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: Piece::Rook,
+                    square: to,
+                });
+
+                //king
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: piece.piece,
+                    square: m.from,
+                });
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: piece.piece,
+                    square: m.to,
+                });
+
+                for r in self.lost_castle_rights[self.active.index()].lose(CastleRights::Both).iter() {
+                    self.hash ^= hasher.get_castle(*r, self.active);
+                }
             },
             MoveType::Promotion(promote) => {
                 bit_set::unset(self.get_set_mut(self.active, Piece::Pawn), m.to);
                 bit_set::set(self.get_set_mut(self.active, promote), m.to);
                 self.mailbox.force_move(&MoveSquares { from: m.from, to: m.to, promote: Some(promote) });
+                
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: piece.piece,
+                    square: m.from,
+                });
+                self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                    player: self.active,
+                    piece: promote,
+                    square: m.to,
+                });
+
             }
             MoveType::CaptureAndPromotion(_, promote) => {
                 bit_set::unset(self.get_set_mut(self.active, Piece::Pawn), m.to);
@@ -813,6 +899,20 @@ impl Board {
                     Some(cap) => {
                         let set = self.get_set_mut(cap.player, cap.piece);
                         bit_set::unset(set, m.to);
+
+                        self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                            player: self.active,
+                            piece: piece.piece,
+                            square: m.from,
+                        });
+                        self.hash ^= hasher.get_piece(&SpecefiedPiece {
+                            player: self.active,
+                            piece: promote,
+                            square: m.to,
+                        });
+
+                        self.hash ^= hasher.get_piece(&cap);
+
                         true
                     },
                     None => panic!("move failed, no piece to capture"),
@@ -820,30 +920,45 @@ impl Board {
                 self.last_irreversable = self.half_move;
             }
         }
-            
+        match self.en_passant_target {
+            Some(ept) => {
+                self.hash ^= hasher.get_en_passant(ept)
+            }
+            None => ()
+        }
         self.en_passant_target = None;
         match piece.piece{
             Piece::Pawn => {
                 self.last_irreversable = self.half_move;
                 if (rank(m.to) as i32 - rank(m.from) as i32).abs() == 2 {
-                    self.en_passant_target = Some( (m.to + m.from) / 2 ); //really stupid to do it like this
+                    let ept = (m.to + m.from) / 2;
+                    self.en_passant_target = Some( ept ); //really stupid to do it like this
+                    self.hash ^= hasher.get_en_passant(ept);
                 }
             }
             Piece::King => {
-                self.lost_castle_rights[self.active.index()].lose(CastleRights::Both)
+                for r in self.lost_castle_rights[self.active.index()].lose(CastleRights::Both).iter() {
+                    self.hash ^= hasher.get_castle(*r, self.active);
+                }
             },
             Piece::Rook => {
                 if m.from == Self::get_castle_rook(self.active, &CastleType::KingSide) {
-                    self.lost_castle_rights[self.active.index()].lose(CastleRights::KingSide);
+                    for r in self.lost_castle_rights[self.active.index()].lose(CastleRights::KingSide).iter() {
+                        self.hash ^= hasher.get_castle(*r, self.active);
+                    }
                 }
                 else if m.from == Self::get_castle_rook(self.active, &CastleType::QueenSide) {
-                    self.lost_castle_rights[self.active.index()].lose(CastleRights::QueenSide);
+                    for r in self.lost_castle_rights[self.active.index()].lose(CastleRights::QueenSide).iter() {
+                        self.hash ^= hasher.get_castle(*r, self.active);
+                    }                
                 }
             }
             _ => (),
         }
         self.half_move += 1;
+        self.hash ^= hasher.get_player(self.active);
         self.active = self.active.invert();
+        self.hash ^= hasher.get_player(self.active);
     }
 
     pub fn eval(&self) -> f64 {
@@ -857,7 +972,7 @@ impl Board {
         return active_count - opp_count;
     }
 
-    fn perft_impl(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks)-> u64 {
+    fn perft_impl(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks, hasher: &GameHasher) -> u64 {
         if n == 0 {
             return 1;
         }
@@ -865,13 +980,13 @@ impl Board {
         let moves = self.generate_legal(gen, slide);
         for m in &moves {
             let mut b = self.clone();
-            b.make_move(m);
-            res += b.perft_impl(n - 1, gen, slide);
+            b.make_move(m, hasher);
+            res += b.perft_impl(n - 1, gen, slide, hasher);
         };
         res
     }
 
-    pub fn perft(&self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> u64 {
+    pub fn perft(&self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks, hasher: &GameHasher) -> u64 {
         if n == 0 {
             return 1;
         }
@@ -880,8 +995,8 @@ impl Board {
         let moves = copy.generate_legal(gen, slide);
         for m in &moves {
             let mut b = copy.clone();
-            b.make_move(m);
-            let res2 = b.perft_impl(n - 1, gen, slide);
+            b.make_move(m, hasher);
+            let res2 = b.perft_impl(n - 1, gen, slide, hasher);
             println!("{}{}: {}", pretty_square(m.from), pretty_square(m.to), res2);
             res += res2;
         };
@@ -902,6 +1017,28 @@ impl Board {
                 cache.check != 0
             }
         }
+    }
+
+    fn new_hash(&self, hasher: &GameHasher) -> HashT {
+        let mut res = 0;
+        for p in self.mailbox.iter() {
+            res ^= hasher.get_piece(&p);
+        }
+        res ^= hasher.get_player(self.active);
+        for player in Player::iter() {
+            for right in self.lost_castle_rights[player.index()].get_rights().iter() {
+                res ^= hasher.get_castle(*right, player);
+            }
+        }
+        match self.en_passant_target {
+            Some(n) => res ^ hasher.get_en_passant(n),
+            None => res
+        }
+    }
+
+    pub fn update_hash(mut self, hasher: &GameHasher) -> Self {
+        self.hash = self.new_hash(hasher);
+        self
     }
 }
 impl Mailbox {
@@ -978,8 +1115,9 @@ impl<'a> Iterator for MailboxIter<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::chess::{board::{Board, adjust_square}, generator::{PossibleMoveGenerator, SliderMasks}};
+    use crate::chess::{moves::{Move, CastleType}, piece::{Piece}, board::{Board, adjust_square}, generator::{PossibleMoveGenerator, SliderMasks}, hash::GameHasher};
 
+    use super::MoveType;
     #[test]
     fn file_and_rank() {
         assert!( super::file(32u8) == 0);
@@ -989,7 +1127,8 @@ mod test {
     #[test]
     fn get_square_attackers() {
         let gen = super::PossibleMoveGenerator::new();
-        let b = Board::from_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - ");
+        let hasher = super::GameHasher::new();
+        let b = Board::from_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - ", &hasher);
         let square = super::adjust_square(0, 2, 3);
         let attackers = b.get_square_attackers(square, &gen);
         println!("{} {attackers}", super::pretty_square(square));
@@ -1024,9 +1163,69 @@ mod test {
         ];
         let gen = PossibleMoveGenerator::new();
         let slide = SliderMasks::new();
+        let hasher = super::GameHasher::new();
         for (fen, nodes) in positions.iter().zip(nodes_4) {
-            let b = Board::from_fen(fen);
-            assert!(b.perft(depth, &gen, &slide) == nodes);
+            let b = Board::from_fen(fen, &hasher);
+            assert!(b.perft(depth, &gen, &slide, &hasher) == nodes);
         }
     }
-}
+    #[test]
+    fn hash_move() {
+        let hasher = GameHasher::new();
+        let mut b1 = Board::new(&hasher);
+        b1.make_move(&Move {
+            from: 55,
+            to: 39,
+            move_type: MoveType::Quiet,
+        }, &hasher);
+        let b2 = Board::from_fen("rnbqkbnr/pppppppp/8/8/7P/8/PPPPPPP1/RNBQKBNR b KQkq h3 0 1", &hasher);
+        assert!(b1.hash == b2.hash);
+    }
+    #[test]
+    fn hash_castle() {
+        let hasher = GameHasher::new();
+        let mut b1 = Board::from_fen("rnbqk1nr/ppp2ppp/3p4/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4", &hasher);
+        b1.make_move(&Move {
+            from: 60,
+            to: 62,
+            move_type: MoveType::Castle(CastleType::KingSide),
+        }, &hasher);
+        let b2 = Board::from_fen("rnbqk1nr/ppp2ppp/3p4/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQ1RK1 b kq - 1 4", &hasher);
+        assert!(b1.hash == b2.hash);
+    }
+    #[test]
+    fn hash_capture() {
+        let hasher = GameHasher::new();
+        let mut b1 = Board::from_fen("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2", &hasher);
+        b1.make_move(&Move {
+            from: 36,
+            to: 27,
+            move_type: MoveType::Capture(Piece::Pawn),
+        }, &hasher);
+        let b2 = Board::from_fen("rnbqkbnr/ppp1pppp/8/3P4/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 2", &hasher);
+        assert!(b1.hash == b2.hash);
+    }
+    #[test]
+    fn hash_en_passant() {
+        let hasher = GameHasher::new();
+        let mut b1 = Board::from_fen("rnbqkbnr/ppppp1p1/7p/4Pp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", &hasher);
+        b1.make_move(&Move {
+            from: 28,
+            to: 21,
+            move_type: MoveType::EnPassent,
+        }, &hasher);
+        let b2 = Board::from_fen("rnbqkbnr/ppppp1p1/5P1p/8/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 3", &hasher);
+        assert!(b1.hash == b2.hash);
+    }
+    #[test]
+    fn hash_diff() {
+        let hasher = GameHasher::new();
+        let mut b1 = Board::from_fen("rnbqkbnr/ppppp1p1/7p/4Pp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", &hasher);
+        let hash = b1.hash;
+        b1.make_move(&Move {
+            from: 28,
+            to: 21,
+            move_type: MoveType::EnPassent,
+        }, &hasher);
+        assert!(hash != b1.hash);
+    }}
