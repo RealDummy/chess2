@@ -5,8 +5,8 @@ mod piece;
 mod input;
 mod generator;
 mod hash;
+mod transpositition;
 
-use std::collections::HashMap;
 
 use generator::{
     PossibleMoveGenerator,
@@ -15,16 +15,16 @@ use generator::{
 use board::Board;
 use moves::Move;
 use hash::{GameHasher};
+use self::{board::{MoveType}, piece::Piece, hash::HashT};
+use transpositition::TTable;
 
-use self::{board::{MoveType}, piece::Piece};
-pub struct TNode {}
 pub struct Game {
     gen: PossibleMoveGenerator,
     slide: SliderMasks,
     board: Board,
     last_move: Option<Move>,
     hasher: GameHasher,
-    table: HashMap<Board, TNode>,
+    table: TTable,
 }
 
 pub enum MoveResult {
@@ -44,7 +44,7 @@ impl Game {
             board: Board::new(&hasher),
             last_move: None,
             hasher,
-            table: HashMap::new(),
+            table: TTable::new(),
         }
     }
     pub fn from_fen(fen: &str) -> Self {
@@ -55,7 +55,7 @@ impl Game {
             board: Board::from_fen(fen, &hasher),
             last_move: None,
             hasher,
-            table: HashMap::new(),
+            table: TTable::new(),
         }
     }
     pub fn fen(&self) -> String {
@@ -122,7 +122,7 @@ impl Game {
         res
     }
 
-    fn quiesce(&self, mut board: Board, mut alpha: f64, beta: f64) -> f64 {
+    fn quiesce(&self, board: &mut Board, mut alpha: f32, beta: f32) -> f32 {
         let standing_eval = board.eval();
         if standing_eval >= beta {
             return beta;
@@ -133,7 +133,7 @@ impl Game {
         for capture in board.generate_legal_captures(&self.gen, &self.slide) {
             let mut b2 = board.clone();
             b2.make_move(&capture, &self.hasher);
-            let new_eval = -self.quiesce(b2, -beta, -alpha);
+            let new_eval = -self.quiesce(&mut b2, -beta, -alpha);
             if new_eval >= beta {
                 return beta;
             }
@@ -144,14 +144,14 @@ impl Game {
         alpha
     }
 
-    fn alpha_beta(&self, mut board: Board, mut alpha: f64, beta: f64, depth_left: i32) -> f64 {
+    fn alpha_beta(&mut self, board: &mut Board, mut alpha: f32, beta: f32, depth_left: i32) -> f32 {
         if depth_left == 0 {
             return self.quiesce(board, alpha, beta);
         }
         for m in board.generate_legal(&self.gen, &self.slide) {
             let mut b2 = board.clone();
             b2.make_move(&m, &self.hasher);
-            let score = -self.alpha_beta(b2, -beta, -alpha, depth_left - 1);
+            let score = -self.alpha_beta(&mut b2, -beta, -alpha, depth_left - 1);
             if score >= beta {
                 return beta;
             }
@@ -161,27 +161,20 @@ impl Game {
         }
         alpha
     }
-    pub fn eval_pos(&mut self, depth: i32) -> f64 {
-        self.eval_impl(depth, self.board.clone())
-    }
-    pub fn root_search(&mut self, depth: i32) -> (Move, f64) {
+    pub fn root_search(&mut self, depth: i32) -> (Move, f32) {
         assert!(depth >= 1);
-        let mut alpha = f64::NEG_INFINITY;
+        let mut alpha = f32::NEG_INFINITY;
         let mut best_move = None;
         for m in self.board.generate_legal(&self.gen, &self.slide) {
             let mut b2 = self.board.clone();
             b2.make_move(&m, &self.hasher);
-            let score = -self.alpha_beta(b2, f64::NEG_INFINITY, -alpha, depth - 1);
+            let score = -self.alpha_beta(&mut b2, f32::NEG_INFINITY, -alpha, depth - 1);
             if score > alpha {
                 alpha = score;
                 best_move = Some(m);
             }
         }
         (best_move.unwrap(), alpha)
-    }
-    fn eval_impl(&mut self, depth: i32, board: Board) -> f64 {
-        self.alpha_beta(board, f64::NEG_INFINITY, f64::INFINITY, depth)
-
     }
     pub fn make_best_move(&mut self) {
         let (m, a) = self.root_search(5);

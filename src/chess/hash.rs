@@ -1,9 +1,8 @@
 use super::piece::{SpecefiedPiece, Player};
 use super::board::{CastleType, file};
-use tinyrand;
-use tinyrand::Rand;
+use tinyrand::{self, Rand};
 
-pub type HashT = u64;
+pub type HashT = usize;
 pub struct GameHasher {
     piece: [[HashT; 64]; 12],
     player: HashT,
@@ -15,12 +14,12 @@ impl GameHasher {
     pub fn new() -> Self {
         let mut rand = tinyrand::StdRand::default();
         let mut piece = [[0; 64]; 12];
-        piece.iter_mut().flatten().for_each(|x| *x = rand.next_u64());
-        let player = rand.next_u64();
+        piece.iter_mut().flatten().for_each(|x| *x = rand.next_usize());
+        let player = rand.next_usize();
         let mut castle_rights = [0; 4];
-        castle_rights.iter_mut().for_each(|x| *x = rand.next_u64());
+        castle_rights.iter_mut().for_each(|x| *x = rand.next_usize());
         let mut en_passant_file = [0; 8];
-        en_passant_file.iter_mut().for_each(|x| *x = rand.next_u64());
+        en_passant_file.iter_mut().for_each(|x| *x = rand.next_usize());
         Self {
             piece,
             player,

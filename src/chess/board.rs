@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+use std::hash::Hash;
 use std::slice::Iter;
 use std::vec::Vec;
 
@@ -7,7 +8,8 @@ use crate::chess::piece::{Piece, BLACK_START, WHITE_START, Player, SpecefiedPiec
 use crate::chess::bit_set;
 pub use super::moves::{Move, MoveType, MoveSquares, CastleType};
 use super::generator::{PossibleMoveGenerator, SliderMasks};
-use super::hash::{GameHasher, HashT};
+use super::hash::{GameHasher};
+pub use super::hash::HashT;
 use bit_set::Set;
 use termion::{color};
 
@@ -122,21 +124,26 @@ pub struct Board {
     cache: Option<MoveGenCache>,
     lost_castle_rights: [LostCastleRights; 2],
     hash: HashT
-
-
 }
+
 #[derive(Clone, Copy, Debug)]
 struct MailboxPiece {
     pub player: Player,
     pub piece: Piece,
 }
 
-
 #[derive(Clone)]
 struct Mailbox {
     squares: [Option<MailboxPiece>; 65] //not a typo, 0 has 64 trailing 0's, so squares[64] should be None always!
     //0 having 64 trailing 0's means an empty set's least significant bit (lsb) is 64
 }
+impl Hash for Board {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write(&self.hash.to_owned().to_ne_bytes());
+    }
+}
+
+pub type EvalT = f32;
 
 impl Board {
     pub fn new(hasher: &GameHasher) -> Self{
@@ -282,7 +289,9 @@ impl Board {
         res
         
     }
-
+    pub fn get_hash(&self) -> HashT {
+        self.hash
+    }
     fn draw_board(buffer: &[char; 64], player: Player, last_move: Option<u8>) {
         println!("{}  ┏━━━━━━━━━━━━━━━━━━━━━━━━┓", color::Fg(color::White));
         let square_iter  = match player {
@@ -961,13 +970,13 @@ impl Board {
         self.hash ^= hasher.get_player(self.active);
     }
 
-    pub fn eval(&self) -> f64 {
+    pub fn eval(&self) -> EvalT {
         let piece_value = [1.0, 3.0, 3.0, 5.0, 9.0, 300.0];
         let active_count = Piece::iter().fold(0.0, |a, p| {
-            bit_set::count(self.get_set(self.active, p)) as f64 * piece_value[p.index()] + a
+            bit_set::count(self.get_set(self.active, p)) as EvalT * piece_value[p.index()] + a
         });
         let opp_count = Piece::iter().fold(0.0, |a, p| {
-            bit_set::count(self.get_set(self.active.invert(), p)) as f64 * piece_value[p.index()] + a
+            bit_set::count(self.get_set(self.active.invert(), p)) as EvalT * piece_value[p.index()] + a
         });
         return active_count - opp_count;
     }
