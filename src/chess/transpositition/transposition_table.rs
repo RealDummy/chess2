@@ -1,6 +1,8 @@
+use crate::chess::board::Move;
+
 use super::hash_table::HashTable;
 use super::super::board::{EvalT, Board};
-use super::super::HashT;
+
 #[derive(Clone)]
 pub enum Score {
     Exact(EvalT),
@@ -9,9 +11,9 @@ pub enum Score {
 }
 #[derive(Clone)]
 pub struct TTableNode {
-    hash: HashT,
-    depth: u32,
-    eval: Score,
+    pub depth: u32,
+    pub eval: Score,
+    pub best: Option<Move>,
 }
 
 fn replace_shallow_strategy(a: &TTableNode, b: TTableNode) -> Option<TTableNode> {

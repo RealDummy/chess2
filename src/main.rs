@@ -108,7 +108,7 @@ fn main() {
                         match game.active_player() {
                             chess::Player::White => (),
                             chess::Player::Black => {
-                                game.make_best_move();
+                                game.make_best_move(std::time::Duration::new(5, 0));
                                 game.show();
                             }
                         }
