@@ -6,6 +6,7 @@ mod input;
 mod generator;
 mod hash;
 mod transpositition;
+mod piece_square;
 
 
 use generator::{
@@ -15,7 +16,7 @@ use generator::{
 use board::Board;
 use moves::Move;
 use hash::{GameHasher};
-use self::{board::{MoveType}, piece::Piece, hash::HashT};
+use self::{board::{MoveType, EvalT}, piece::Piece, hash::HashT};
 use transpositition::{TTable, TTableNode, Score};
 
 use std::time::{Duration, Instant};
@@ -124,7 +125,7 @@ impl Game {
         res
     }
 
-    fn quiesce(&self, board: &mut Board, mut alpha: f32, beta: f32) -> f32 {
+    fn quiesce(&self, board: &mut Board, mut alpha: EvalT, beta: EvalT) -> EvalT {
         let standing_eval = board.eval();
         if standing_eval >= beta {
             return beta;
@@ -146,7 +147,7 @@ impl Game {
         alpha
     }
 
-    fn alpha_beta(&mut self, board: &mut Board, mut alpha: f32, beta: f32, depth_left: i32) -> f32 {
+    fn alpha_beta(&mut self, board: &mut Board, mut alpha: EvalT, beta: EvalT, depth_left: i32) -> EvalT {
         if depth_left == 0 {
             return self.quiesce(board, alpha, beta);
         }
@@ -163,49 +164,60 @@ impl Game {
         }
         alpha
     }
-    fn search_best(&mut self, board: &mut Board, mut alpha: f32, mut beta: f32, depth: u32, max_depth: u32) -> (Option<Move>, f32) {
+    fn search_best(&mut self, board: &mut Board, mut alpha: EvalT, mut beta: EvalT, depth: u8, max_depth: u8) -> (Option<Move>, EvalT) {
         let node = self.table.get(board.get_hash());
         if let Some(data) = node {
-            if depth <= data.depth {
+            if max_depth - depth <= data.ply {
                 match data.eval {
                     Score::Exact(s) => {
                         return (data.best.clone(), s);
                     },
                     Score::LowerBound(s) => {
-                        alpha = s;
-                    },
+                        alpha = match data.is_odd {
+                            true => -s,
+                            false => s,
+                        };                    },
                     Score::UpperBound(s) => {
-                        beta = s;
+                        beta = match data.is_odd {
+                            true => -s,
+                            false => s,
+                        };
                     }
                 }
             }
         }
         if depth == max_depth {
             let eval = self.quiesce(board, alpha, beta);
-            self.table.insert(board.get_hash(), TTableNode { depth, eval: Score::Exact(eval), best: None});
+            //self.table.insert(board.get_hash(), TTableNode { depth, eval: Score::Exact(eval), best: None});
             return (None, eval);
         }
+        let is_odd = match depth % 2 {
+            1 => true,
+            _ => false,
+        };
         let mut best_move = None;
         for m in board.generate_legal(&self.gen, &self.slide) {
             let mut b2 = board.clone();
             b2.make_move(&m, &self.hasher);
-            let tuple = self.search_best(&mut b2, -beta, -alpha, depth + 1, max_depth);
-            let score = -tuple.1;
+            let (best, inverse_score) = self.search_best(&mut b2, -beta, -alpha, depth + 1, max_depth);
+            let score = -inverse_score;
             if score >= beta {
-                self.table.insert(  b2.get_hash(), TTableNode {depth, eval: Score::UpperBound(score), best: None});
+                self.table.insert(  b2.get_hash(), TTableNode {ply: max_depth - depth - 1, eval: Score::UpperBound(beta), best, is_odd});
                 return (None, beta);
             }
             else if score > alpha {
-                self.table.insert(b2.get_hash(), TTableNode { depth, eval: Score::Exact(score), best: Some(m.clone())});
+                self.table.insert(b2.get_hash(), TTableNode { ply: max_depth - depth - 1, eval: Score::Exact(score), best, is_odd});
                 alpha = score;
                 best_move = Some(m);
             }
             else {
-                self.table.insert(b2.get_hash(), TTableNode {depth, eval: Score::LowerBound(score), best: Some(m)});
+                self.table.insert(b2.get_hash(), TTableNode {ply: max_depth - depth - 1, eval: Score::LowerBound(alpha), best, is_odd});
             }
         }
+        self.table.insert(board.get_hash(), TTableNode { ply: max_depth - depth, eval: Score::Exact(alpha), best: best_move.clone(), is_odd});
         (best_move, alpha)
     }
+    
     pub fn make_best_move(&mut self, min_duration: Duration) {
         let start = Instant::now();
         let mut depth = 2;
@@ -213,7 +225,7 @@ impl Game {
         let mut prev_time = Duration::new(0,0);
         while Instant::now() - start + prev_time * 20 < min_duration {
             let search_start = Instant::now();
-            let (m, a) = self.search_best(&mut self.board.clone(), f32::NEG_INFINITY, f32::INFINITY, 0, depth);
+            let (m, a) = self.search_best(&mut self.board.clone(), EvalT::MIN + 1, EvalT::MAX, 0, depth);
             let search_end = Instant::now();
             prev_time = search_end - search_start;
             best = match m {
@@ -223,7 +235,12 @@ impl Game {
             depth += 1;
             println!("{}", depth);
         }
-        self.make_move(&best.unwrap());
+        match best {
+            Some(best) => {
+                self.make_move(&best);
+            },
+            None => (),
+        }
     }
     pub fn show(&self) {
         let square = match &self.last_move {

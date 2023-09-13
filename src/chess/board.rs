@@ -9,6 +9,7 @@ use crate::chess::bit_set;
 pub use super::moves::{Move, MoveType, MoveSquares, CastleType};
 use super::generator::{PossibleMoveGenerator, SliderMasks};
 use super::hash::{GameHasher};
+use crate::chess::piece_square::eval_piece;
 pub use super::hash::HashT;
 use bit_set::Set;
 use termion::{color};
@@ -131,7 +132,7 @@ impl Hash for Board {
     }
 }
 
-pub type EvalT = f32;
+pub type EvalT = i16;
 
 impl Board {
     pub fn new(hasher: &GameHasher) -> Self{
@@ -989,14 +990,19 @@ impl Board {
     }
 
     pub fn eval(&self) -> EvalT {
-        let piece_value = [1.0, 3.0, 3.0, 5.0, 9.0, 300.0];
-        let active_count = Piece::iter().fold(0.0, |a, p| {
-            bit_set::count(self.get_set(self.active, p)) as EvalT * piece_value[p.index()] + a
-        });
-        let opp_count = Piece::iter().fold(0.0, |a, p| {
-            bit_set::count(self.get_set(self.active.invert(), p)) as EvalT * piece_value[p.index()] + a
-        });
-        return active_count - opp_count;
+        let eval_player = |player| {
+            Piece::iter().fold(0, |a, p| {
+                let mut acc = 0;
+                let mut set = self.get_set(player, p);
+                while set != 0 {
+                    let pos = bit_set::lsb_pos(set);
+                    acc += eval_piece(player, p, pos);
+                    bit_set::clear_lsb(&mut set);
+                }
+                acc + a
+            })
+        };
+        eval_player(self.active_player()) - eval_player(self.active_player().invert())
     }
 
     fn perft_impl(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks, hasher: &GameHasher) -> u64 {

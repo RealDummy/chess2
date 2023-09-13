@@ -11,13 +11,14 @@ pub enum Score {
 }
 #[derive(Clone)]
 pub struct TTableNode {
-    pub depth: u32,
+    pub is_odd: bool,
+    pub ply: u8,
     pub eval: Score,
     pub best: Option<Move>,
 }
 
 fn replace_shallow_strategy(a: &TTableNode, b: TTableNode) -> Option<TTableNode> {
-    if a.depth >= b.depth {
+    if a.ply >= b.ply {
         None
     }
     else {

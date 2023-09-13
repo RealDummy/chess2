@@ -34,7 +34,7 @@ where
         for i in 0..table_size.trailing_zeros() {
             mask |= 1 << i;
         }
-        let mut table = vec![None; table_size];
+        let table = vec![None; table_size];
         Self {
             table,
             load: 0,
