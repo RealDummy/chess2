@@ -50,16 +50,16 @@ impl Game {
             table: TTable::new(),
         }
     }
-    pub fn from_fen(fen: &str) -> Self {
+    pub fn from_fen(fen: &str) -> Result<Self, &'static str> {
         let hasher = GameHasher::new();
-        Self {
+        Ok(Self {
             gen: generator::PossibleMoveGenerator::new(),
             slide: SliderMasks::new(),
-            board: Board::from_fen(fen, &hasher),
+            board: Board::from_fen(fen, &hasher)?,
             last_move: None,
             hasher,
             table: TTable::new(),
-        }
+        })
     }
     pub fn fen(&self) -> String {
         self.board.to_fen()
@@ -125,10 +125,34 @@ impl Game {
         res
     }
 
-    fn quiesce(&self, board: &mut Board, mut alpha: EvalT, beta: EvalT) -> EvalT {
+    fn quiesce(&self, board: &mut Board, mut alpha: EvalT, mut beta: EvalT, depth: u8) -> EvalT {
+        let node = self.table.get(board.get_hash());
+        if let Some(data) = node {
+            if depth <= data.ply {
+                match data.eval {
+                    Score::Exact(s) => {
+                        return  s;
+                    },
+                    Score::LowerBound(s) => {
+                        alpha = match data.is_odd {
+                            true => -s,
+                            false => s,
+                        };                    },
+                    Score::UpperBound(s) => {
+                        beta = match data.is_odd {
+                            true => -s,
+                            false => s,
+                        };
+                    }
+                }
+            }
+        }
         let standing_eval = board.eval();
         if standing_eval >= beta {
             return beta;
+        }
+        if(depth > 3) {
+            return standing_eval;
         }
         if alpha < standing_eval {
             alpha = standing_eval;
@@ -136,7 +160,7 @@ impl Game {
         for capture in board.generate_legal_captures(&self.gen, &self.slide) {
             let mut b2 = board.clone();
             b2.make_move(&capture, &self.hasher);
-            let new_eval = -self.quiesce(&mut b2, -beta, -alpha);
+            let new_eval = -self.quiesce(&mut b2, -beta, -alpha, depth + 1);
             if new_eval >= beta {
                 return beta;
             }
@@ -149,7 +173,7 @@ impl Game {
 
     fn alpha_beta(&mut self, board: &mut Board, mut alpha: EvalT, beta: EvalT, depth_left: i32) -> EvalT {
         if depth_left == 0 {
-            return self.quiesce(board, alpha, beta);
+            return self.quiesce(board, alpha, beta, 0);
         }
         for m in board.generate_legal(&self.gen, &self.slide) {
             let mut b2 = board.clone();
@@ -187,7 +211,7 @@ impl Game {
             }
         }
         if depth == max_depth {
-            let eval = self.quiesce(board, alpha, beta);
+            let eval = self.quiesce(board, alpha, beta, 0);
             //self.table.insert(board.get_hash(), TTableNode { depth, eval: Score::Exact(eval), best: None});
             return (None, eval);
         }
@@ -206,7 +230,7 @@ impl Game {
                 return (None, beta);
             }
             else if score > alpha {
-                self.table.insert(b2.get_hash(), TTableNode { ply: max_depth - depth - 1, eval: Score::Exact(score), best, is_odd});
+                //self.table.insert(b2.get_hash(), TTableNode { ply: max_depth - depth - 1, eval: Score::Exact(score), best, is_odd});
                 alpha = score;
                 best_move = Some(m);
             }
@@ -222,18 +246,18 @@ impl Game {
         let start = Instant::now();
         let mut depth = 2;
         let mut best = None;
-        let mut prev_time = Duration::new(0,0);
-        while Instant::now() - start + prev_time * 20 < min_duration {
-            let search_start = Instant::now();
+        loop  {
             let (m, a) = self.search_best(&mut self.board.clone(), EvalT::MIN + 1, EvalT::MAX, 0, depth);
-            let search_end = Instant::now();
-            prev_time = search_end - search_start;
+            println!("eval = {a}, move = {m:?}");
             best = match m {
                 None => best,
                 s => s,
             };
             depth += 1;
             println!("{}", depth);
+            if Instant::now() - start > min_duration {
+                break;
+            }
         }
         match best {
             Some(best) => {

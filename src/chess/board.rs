@@ -3,9 +3,10 @@ use std::hash::Hash;
 use std::slice::Iter;
 use std::vec::Vec;
 
-use super::input::{get_square};
+use super::input::get_square;
 use crate::chess::piece::{Piece, BLACK_START, WHITE_START, Player, SpecefiedPiece};
 use crate::chess::bit_set;
+use super::moves;
 pub use super::moves::{Move, MoveType, MoveSquares, CastleType};
 use super::generator::{PossibleMoveGenerator, SliderMasks};
 use super::hash::{GameHasher};
@@ -140,7 +141,7 @@ impl Board {
         Self {
             pieces,
             active: Player::White,
-            half_move: 0,
+            half_move: 1,
             en_passant_target: None,
             last_irreversable: 0,
             cache: None,
@@ -161,12 +162,12 @@ impl Board {
             hash: 0,
         }.update_hash(hasher)
     }
-    pub fn from_fen(fen: &str, hasher: &GameHasher) -> Self {
+    pub fn from_fen(fen: &str, hasher: &GameHasher) -> Result<Self, &'static str> {
         let mut board = Self::empty(hasher);
         let mut rank: i32 = 0;
         let mut file: i32 = 0;
         let mut chiter = fen.chars();
-
+        let mut error = false;
         //set up board
         chiter.any(|c| {
             match c {
@@ -202,7 +203,11 @@ impl Board {
             }
             active = match c {
                 'b' => Player::Black,
-                'w' | _ => Player::White,
+                'w' => Player::White,
+                _ => {
+                    error = true;
+                    Player::White
+                }
             };
             false
 
@@ -219,7 +224,9 @@ impl Board {
                 'k' => {black_castle_rights.lose(CastleRights::KingSide);},
                 'Q' => {white_castle_rights.lose(CastleRights::QueenSide);},
                 'K' => {white_castle_rights.lose(CastleRights::KingSide);},
-                _ => (),
+                _ => {
+                    error = true
+                },
             }
             false
         });
@@ -230,19 +237,25 @@ impl Board {
         let ept_str: String = chiter.by_ref().take_while(|&c| {
             c.is_ascii_alphanumeric() || c == '-'
         }).collect();
+
         let ept = match get_square(&ept_str) {
             Ok(s) => Some(s),
-            Err(_) => {None}
+            Err(_) => None,
         };
-
+        if ept.is_none() && ept_str != "-" {
+            error = true;
+        }
         chiter.any(|c| c == ' ');
         
         let last_pawn_move: String = chiter.by_ref().take_while(|c| c.is_ascii_digit()).collect();
-        let last_irreversable: u32 = last_pawn_move.parse().ok().unwrap_or(0);
+        let last_irreversable: u32 = last_pawn_move.parse().ok().unwrap_or_else(|| {error = true; 0});
 
         let move_count: String = chiter.by_ref().take_while(|d| d.is_ascii_digit()).collect();
-        let half_move: u32 = move_count.parse().ok().unwrap_or(0) * 2 + active.index() as u32;
-        Self {
+        let half_move: u32 = move_count.parse().ok().unwrap_or_else(|| {error = true; 1}) * 2 + active.index() as u32;
+        if error {
+            return Err("invalid fen");
+        }
+        Ok(Self {
             active,
             pieces: board.pieces,
             en_passant_target: ept,
@@ -251,7 +264,7 @@ impl Board {
             cache: None,
             lost_castle_rights: [white_castle_rights, black_castle_rights],
             hash: 0,
-        }.update_hash(hasher)
+        }.update_hash(hasher))
 
     }
 
@@ -284,7 +297,79 @@ impl Board {
     }
 
     pub fn to_fen(&self) -> String {
-        todo!()
+        let mut fen = String::new();
+        for rank in 0..8 {
+            let mut empty_count = 0;
+            for file in 0..8 {
+                let square = rank * 8 + file;
+                let (piece, player) = match self.get_piece(square, Player::White) {
+                    Some(p) => (Some(p), Player::White),
+                    None => (self.get_piece(square, Player:: Black), Player::Black)
+                };
+                match piece {
+                    Some(p) => {
+                        let char = p.get_letter(player);
+                        if empty_count != 0 {
+                            fen += format!("{empty_count}").as_ref();
+                        }
+                        fen.push(char);
+                        empty_count = 0;
+                    }
+                    None => {
+                        empty_count += 1;
+                    }
+                }
+            }
+            if empty_count != 0 {
+                fen += format!("{empty_count}").as_ref();
+            }
+            if rank != 7 {
+                fen.push('/');
+            }
+        }
+        fen.push(' ');
+        
+        let active_player = match self.active_player() {
+            Player::Black => 'b',
+            Player::White => 'w'
+        };
+        fen.push(active_player);
+        fen.push(' ');
+
+        let white_castles = match self.lost_castle_rights[Player::White.index()].get_rights() {
+            CastleRights::None => "",
+            CastleRights::KingSide => "K",
+            CastleRights::QueenSide => "Q",
+            CastleRights::Both => "KQ",
+        };
+        let black_castles = match self.lost_castle_rights[Player::Black.index()].get_rights() {
+            CastleRights::None => "",
+            CastleRights::KingSide => "k",
+            CastleRights::QueenSide => "q",
+            CastleRights::Both => "kq",
+        };
+        if white_castles == "" && black_castles == "" {
+            fen.push('-');
+        }
+        fen += white_castles;
+        fen += black_castles;
+        fen.push(' ');
+
+        match self.en_passant_target {
+            Some(square) => {
+                fen += moves::to_algerbraic(square).as_str();
+            }
+            None => {
+                fen.push('-')
+            }
+        }
+        fen.push(' ');
+    
+        fen += format!("{}", self.half_move - self.last_irreversable - 1).as_str();
+        fen.push(' ');
+        fen += format!("{}", self.half_move / 2 + self.half_move % 2).as_str();
+        
+        fen
     }
 
     #[allow(unused)]
@@ -851,8 +936,6 @@ impl Board {
                     square: m.to,
                 });
 
-
-
             }
             MoveType::Quiet => {
                 self.hash ^= hasher.get_piece(&SpecefiedPiece {
@@ -914,6 +997,8 @@ impl Board {
                     piece: promote,
                     square: m.to,
                 });
+
+                self.last_irreversable = self.half_move;
 
             }
             MoveType::CaptureAndPromotion(cap_piece, promote) => {
@@ -995,7 +1080,7 @@ impl Board {
                 let mut acc = 0;
                 let mut set = self.get_set(player, p);
                 while set != 0 {
-                    let pos = bit_set::lsb_pos(set);
+                    let pos = 63 - bit_set::lsb_pos(set);
                     acc += eval_piece(player, p, pos);
                     bit_set::clear_lsb(&mut set);
                 }
@@ -1125,7 +1210,7 @@ mod test {
     fn get_square_attackers() {
         let gen = super::PossibleMoveGenerator::new();
         let hasher = super::GameHasher::new();
-        let b = Board::from_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - ", &hasher);
+        let b = Board::from_fen("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - ", &hasher).unwrap();
         let square = super::adjust_square(0, 2, 3);
         let attackers = b.get_square_attackers(square, &gen);
         println!("{} {attackers}", super::pretty_square(square));
@@ -1162,7 +1247,7 @@ mod test {
         let slide = SliderMasks::new();
         let hasher = super::GameHasher::new();
         for (fen, nodes) in positions.iter().zip(nodes_4) {
-            let b = Board::from_fen(fen, &hasher);
+            let b = Board::from_fen(fen, &hasher).unwrap();
             assert!(b.perft(depth, &gen, &slide, &hasher) == nodes);
         }
     }
@@ -1175,49 +1260,49 @@ mod test {
             to: 39,
             move_type: MoveType::Quiet,
         }, &hasher);
-        let b2 = Board::from_fen("rnbqkbnr/pppppppp/8/8/7P/8/PPPPPPP1/RNBQKBNR b KQkq h3 0 1", &hasher);
+        let b2 = Board::from_fen("rnbqkbnr/pppppppp/8/8/7P/8/PPPPPPP1/RNBQKBNR b KQkq h3 0 1", &hasher).unwrap();
         assert!(b1.hash == b2.hash);
     }
     #[test]
     fn hash_castle() {
         let hasher = GameHasher::new();
-        let mut b1 = Board::from_fen("rnbqk1nr/ppp2ppp/3p4/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4", &hasher);
+        let mut b1 = Board::from_fen("rnbqk1nr/ppp2ppp/3p4/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4", &hasher).unwrap();
         b1.make_move(&Move {
             from: 60,
             to: 62,
             move_type: MoveType::Castle(CastleType::KingSide),
         }, &hasher);
-        let b2 = Board::from_fen("rnbqk1nr/ppp2ppp/3p4/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQ1RK1 b kq - 1 4", &hasher);
+        let b2 = Board::from_fen("rnbqk1nr/ppp2ppp/3p4/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQ1RK1 b kq - 1 4", &hasher).unwrap();
         assert!(b1.hash == b2.hash);
     }
     #[test]
     fn hash_capture() {
         let hasher = GameHasher::new();
-        let mut b1 = Board::from_fen("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2", &hasher);
+        let mut b1 = Board::from_fen("rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq d6 0 2", &hasher).unwrap();
         b1.make_move(&Move {
             from: 36,
             to: 27,
             move_type: MoveType::Capture(Piece::Pawn),
         }, &hasher);
-        let b2 = Board::from_fen("rnbqkbnr/ppp1pppp/8/3P4/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 2", &hasher);
+        let b2 = Board::from_fen("rnbqkbnr/ppp1pppp/8/3P4/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 2", &hasher).unwrap();
         assert!(b1.hash == b2.hash);
     }
     #[test]
     fn hash_en_passant() {
         let hasher = GameHasher::new();
-        let mut b1 = Board::from_fen("rnbqkbnr/ppppp1p1/7p/4Pp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", &hasher);
+        let mut b1 = Board::from_fen("rnbqkbnr/ppppp1p1/7p/4Pp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", &hasher).unwrap();
         b1.make_move(&Move {
             from: 28,
             to: 21,
             move_type: MoveType::EnPassent,
         }, &hasher);
-        let b2 = Board::from_fen("rnbqkbnr/ppppp1p1/5P1p/8/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 3", &hasher);
+        let b2 = Board::from_fen("rnbqkbnr/ppppp1p1/5P1p/8/8/8/PPPP1PPP/RNBQKBNR b KQkq - 0 3", &hasher).unwrap();
         assert!(b1.hash == b2.hash);
     }
     #[test]
     fn hash_diff() {
         let hasher = GameHasher::new();
-        let mut b1 = Board::from_fen("rnbqkbnr/ppppp1p1/7p/4Pp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", &hasher);
+        let mut b1 = Board::from_fen("rnbqkbnr/ppppp1p1/7p/4Pp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", &hasher).unwrap();
         let hash = b1.hash;
         b1.make_move(&Move {
             from: 28,

@@ -43,6 +43,9 @@ impl Piece {
     pub fn get_char(&self, player: Player) -> char {
         PIECE_REPR[self.index()][player.index()]
     }
+    pub fn get_letter(&self, player: Player) -> char {
+        ALGEBRAIC_PIECE_REPR[self.index()][player.index()]
+    }
     pub fn iter() -> impl Iterator<Item = Piece> {
         use Piece::*;
         [Pawn,Knight,Bishop,Rook,Queen,King].iter().copied()
@@ -56,6 +59,14 @@ const PIECE_REPR: [[char;2]; 6] = [
     ['♜','♖'],
     ['♛','♕'],
     ['♚','♔'],
+];
+const ALGEBRAIC_PIECE_REPR: [[char;2]; 6] = [
+    ['P','p'],
+    ['N','n'],
+    ['B','b'],
+    ['R','r'],
+    ['Q','q'],
+    ['K','k'],
 ];
 
 pub const WHITE_START: [Set; 6] = [

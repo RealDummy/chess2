@@ -1,0 +1,15 @@
+Commands to enter:
+    perft <depth>
+        -calculate the total moves for depth many turns. 
+        Depths larger than 4 may take a while.
+    fen <fen>
+        -tranform position into entered fen.
+    fen show
+        -see fen for this position
+    show
+        -see board
+    exit
+    reset
+    help
+
+anything else is interpreted as a uci move

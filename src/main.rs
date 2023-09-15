@@ -10,6 +10,9 @@ enum Command {
     Fen(String),
     Show,
     ShowFen,
+    Exit,
+    Reset,
+    Help,
 }
 
 fn get_user_input() -> Option<String> {
@@ -31,10 +34,11 @@ fn get_user_input() -> Option<String> {
 }
 fn transform_input(input: String) -> Result<Command, String> {
     let mut chiter = input.trim().chars();
-    let command: String = chiter.by_ref().take_while(|c| {
+    let mut command: String = chiter.by_ref().take_while(|c| {
         !c.is_whitespace()
     }).map(|c| c.to_ascii_lowercase()).collect();
     let args: String = chiter.collect();
+    command.make_ascii_lowercase();
     match command.as_str() {
         "perft" => {
             let n = match u32::from_str_radix(&args, 10) {
@@ -52,6 +56,15 @@ fn transform_input(input: String) -> Result<Command, String> {
         "show" => {
             Ok(Command::Show)
         },
+        "quit" | "exit" => {
+            Ok(Command::Exit)
+        },
+        "reset" => {
+            Ok(Command::Reset)
+        }
+        "help" => {
+            Ok(Command::Help)
+        }
         _ => {
             Ok(Command::Move(command))
         }
@@ -66,7 +79,7 @@ fn main() {
     let fen = args.get(1);
     let mut game = match fen {
         Some(f) => {
-            chess::Game::from_fen(f)
+            chess::Game::from_fen(f).expect("invalid fen")
         },
         None => chess::Game::new()
     };
@@ -108,14 +121,14 @@ fn main() {
                         match game.active_player() {
                             chess::Player::White => (),
                             chess::Player::Black => {
-                                game.make_best_move(std::time::Duration::new(5, 0));
+                                game.make_best_move(std::time::Duration::new(0, 10000000));
                                 game.show();
                             }
                         }
 
                     },
                     MoveResult::InvalidInput => {
-                        eprintln!("Invalid move, use UCI move notation (file)(rank)(file)(rank)[promote to]");
+                        eprintln!("Invalid move, use UCI move notation <file><rank><file><rank>[promote]");
                         continue;
                     },
                     MoveResult::InvalidMove => {
@@ -126,13 +139,26 @@ fn main() {
                 }
             },
             Command::Fen(fen) => {
-                game = chess::Game::from_fen(&fen);
+                game = chess::Game::from_fen(&fen).or_else(|e| {
+                    eprintln!("{e}");
+                    Ok::<chess::Game, &'static str>(game)
+                }).unwrap();
             },
             Command::ShowFen => {
                 println!("Fen: {}", game.fen())
             }
             Command::Show => {
                 game.show();
+            }
+            Command::Reset => {
+                game = chess::Game::new()
+            }
+            Command::Help => {
+                let info = include_str!("help.txt");
+                println!("{info}");
+            }
+            Command::Exit => {
+                break;
             }
         }
     }
