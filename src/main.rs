@@ -1,5 +1,5 @@
 mod chess;
-use std::{env};
+use std::{env, time::Duration};
 use chess::MoveResult;
 use log4rs;
 use std::io;
@@ -13,6 +13,7 @@ enum Command {
     Exit,
     Reset,
     Help,
+    Switch,
 }
 
 fn get_user_input() -> Option<String> {
@@ -65,11 +66,41 @@ fn transform_input(input: String) -> Result<Command, String> {
         "help" => {
             Ok(Command::Help)
         }
+        "switch" => {
+            Ok(Command::Switch)
+        }
         _ => {
             Ok(Command::Move(command))
         }
     }
 
+}
+fn print_move_result(player: chess::Player, mr: &MoveResult) -> Option<chess::Player> {
+    match mr {
+        MoveResult::Win => {
+            println!("Checkmate! {} wins", match player {
+                chess::Player::Black => "White",
+                chess::Player::White => "Black",
+            });
+            None
+        }
+        MoveResult::Draw => {
+            println!("Stalemate! It's a draw");
+            None
+        }
+        MoveResult::NextTurn => {
+            Some(player.invert())
+        }
+        MoveResult::InvalidInput => {
+            eprintln!("Invalid move, use UCI move notation <file><rank><file><rank>[promote]");
+            Some(player)
+        }
+        MoveResult::InvalidMove => {
+            println!("Illegal move!");
+            Some(player)
+        }
+
+    }
 }
 fn main() {
     if let Err(e) =  log4rs::init_file("./log4rs.yml", Default::default()) {
@@ -84,8 +115,16 @@ fn main() {
         None => chess::Game::new()
     };
     game.show();
-    //println!("{}", game.eval(7));
+    let mut user = game.active_player();
     loop {
+        if game.active_player() != user {
+            let best = game.find_best_move(Duration::from_millis(10));
+            let res = game.try_move(&best);
+            game.show();
+            if let None = print_move_result(game.active_player(), &res) {
+                break;
+            }
+        }
         let user_input = match get_user_input() {
             Some(n) => n,
             None => {break;}
@@ -102,40 +141,17 @@ fn main() {
                 game.perft(n);
             },
             Command::Move(m) => {
-                let mr = game.try_move(&m);
+                let uci = match game.read_uci(&m) {
+                    Ok(m) => m,
+                    Err(msg) => {
+                        eprintln!("{msg}");
+                        continue;
+                    }
+                };
+                let mr = game.try_move(&uci);
                 game.show();
-                match mr {
-                    MoveResult::Win => {
-                        println!("Checkmate! {} wins", match game.active_player() {
-                            chess::Player::Black => "White",
-                            chess::Player::White => "Black",
-                        });
-                        break;
-                    },
-                    MoveResult::Draw => {
-                        println!("Stalemate! It's a draw");
-                        break;
-                    },
-                    MoveResult::NextTurn => {
-                        //game.show();
-                        match game.active_player() {
-                            chess::Player::White => (),
-                            chess::Player::Black => {
-                                game.make_best_move(std::time::Duration::new(0, 10000000));
-                                game.show();
-                            }
-                        }
-
-                    },
-                    MoveResult::InvalidInput => {
-                        eprintln!("Invalid move, use UCI move notation <file><rank><file><rank>[promote]");
-                        continue;
-                    },
-                    MoveResult::InvalidMove => {
-                        println!("Illegal move!");
-                        continue;
-                    },
-
+                if let None = print_move_result(game.active_player(), &mr) {
+                    break;
                 }
             },
             Command::Fen(fen) => {
@@ -143,6 +159,7 @@ fn main() {
                     eprintln!("{e}");
                     Ok::<chess::Game, &'static str>(game)
                 }).unwrap();
+                user = game.active_player();
             },
             Command::ShowFen => {
                 println!("Fen: {}", game.fen())
@@ -151,7 +168,11 @@ fn main() {
                 game.show();
             }
             Command::Reset => {
-                game = chess::Game::new()
+                game = chess::Game::new();
+                user = game.active_player();
+            }
+            Command::Switch => {
+                user = user.invert();
             }
             Command::Help => {
                 let info = include_str!("help.txt");

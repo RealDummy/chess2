@@ -1,11 +1,11 @@
-use crate::chess::board::Move;
+use crate::chess::board::{Move, Evaluation};
 
 use super::hash_table::HashTable;
 use super::super::board::{EvalT, Board};
 
 #[derive(Clone)]
 pub enum Score {
-    Exact(EvalT),
+    Exact(Evaluation),
     LowerBound(EvalT),
     UpperBound(EvalT),
 }

@@ -135,6 +135,14 @@ impl Hash for Board {
 
 pub type EvalT = i16;
 
+#[derive(Debug, Clone, Copy)]
+pub enum Evaluation {
+    MateWin(u16),
+    MateLoss(u16),
+    Draw,
+    Value(EvalT),
+}
+
 impl Board {
     pub fn new(hasher: &GameHasher) -> Self{
         let pieces = [WHITE_START.clone(), BLACK_START.clone()];
@@ -186,7 +194,7 @@ impl Board {
                 'P' => bit_set::set(board.get_set_mut(Player::White, Piece::Pawn), adjust_square(0u8, file, rank)),
                 '/' => {return false;},
                 ' ' => {return true;},
-                _ => {return false},
+                _ => {error = true; return false},
             }
             file += 1;
             if file > 7 {
@@ -245,11 +253,11 @@ impl Board {
         if ept.is_none() && ept_str != "-" {
             error = true;
         }
-        chiter.any(|c| c == ' ');
+        //chiter.any(|c| c == ' ');
         
-        let last_pawn_move: String = chiter.by_ref().take_while(|c| c.is_ascii_digit()).collect();
-        let last_irreversable: u32 = last_pawn_move.parse().ok().unwrap_or_else(|| {error = true; 0});
-
+        let last_irreversable: String = chiter.by_ref().take_while(|c| c.is_ascii_digit()).collect();
+        let last_irreversable: u32 = last_irreversable.parse().ok().unwrap_or_else(|| {error = true; 0});
+        
         let move_count: String = chiter.by_ref().take_while(|d| d.is_ascii_digit()).collect();
         let half_move: u32 = move_count.parse().ok().unwrap_or_else(|| {error = true; 1}) * 2 + active.index() as u32;
         if error {
