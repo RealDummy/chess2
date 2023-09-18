@@ -117,18 +117,20 @@ fn main() {
     game.show();
     let mut user = game.active_player();
     loop {
-        if game.active_player() != user {
+        //if game.active_player() != user {
             let best = game.find_best_move(Duration::from_millis(10));
             let res = game.try_move(&best);
             game.show();
             if let None = print_move_result(game.active_player(), &res) {
                 break;
             }
-        }
+
+        //}
         let user_input = match get_user_input() {
             Some(n) => n,
             None => {break;}
         };
+        continue;
         let command = match transform_input(user_input) {
             Ok(c) => c,
             Err(msg) => {

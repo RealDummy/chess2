@@ -149,13 +149,13 @@ impl Game {
             }
         }
         let standing_eval = board.eval();
-        if standing_eval >= beta {
+        if standing_eval <= beta {
             return Evaluation::Value(beta);
         }
         if depth > 3 {
             return Evaluation::Value(standing_eval);
         }
-        if alpha < standing_eval {
+        if standing_eval < alpha {
             alpha = standing_eval;
         }
         for capture in board.generate_legal_captures(&self.gen, &self.slide) {
@@ -169,15 +169,15 @@ impl Game {
                 Evaluation::Draw => Evaluation::Draw,
             };
             let new_eval= match new_eval {
-                Evaluation::MateWin(_) => EvalT::MAX,
                 Evaluation::MateLoss(_) => EvalT::MIN + 1,
+                Evaluation::MateWin(_) => EvalT::MAX,
                 Evaluation::Draw => 0,
                 Evaluation::Value(v) => v,
             };
-            if new_eval >= beta {
+            if new_eval <= beta {
                 return Evaluation::Value(beta);
             }
-            if new_eval > alpha {
+            if new_eval < alpha {
                 alpha = new_eval;
             }
         }
@@ -245,11 +245,11 @@ impl Game {
                 Evaluation::Draw => 0,
                 Evaluation::Value(v) => v,
             };
-            if score >= beta {
+            if score <= beta {
                 self.table.insert(  b2.get_hash(), TTableNode {ply: max_depth - depth - 1, eval: Score::UpperBound(beta), best, is_odd});
                 return (None, Evaluation::Value(beta));
             }
-            else if score > alpha {
+            else if score < alpha {
                 //self.table.insert(b2.get_hash(), TTableNode { ply: max_depth - depth - 1, eval: Score::Exact(score), best, is_odd});
                 alpha = score;
                 best_move = Some(m);
@@ -267,7 +267,7 @@ impl Game {
         let mut depth = 2;
         let mut best = None;
         loop  {
-            let (m, a) = self.search_best(&mut self.board.clone(), EvalT::MIN + 1, EvalT::MAX, 0, depth);
+            let (m, a) = self.search_best(&mut self.board.clone(), EvalT::MAX, EvalT::MIN + 1, 0, depth);
             best = match m {
                 None => best,
                 s => s,

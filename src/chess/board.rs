@@ -441,7 +441,7 @@ impl Board {
         for p in self.iter_pieces(Player::White).chain(self.iter_pieces(Player::Black)) {  
             buffer[p.square as usize] = p.piece.get_char(p.player);
         }
-        Board::draw_board(&buffer, self.active, last_move);
+        Board::draw_board(&buffer, Player::White, last_move);
     }
     fn get_square_attackers(&self, square: u8, gen: &PossibleMoveGenerator) -> Set {
         Piece::iter().fold(0, |a,piece| {
