@@ -1,4 +1,4 @@
-use crate::chess::board::{Move, Evaluation};
+use crate::chess::board::{Move, Evaluation, HashT};
 
 use super::hash_table::HashTable;
 use super::super::board::{EvalT, Board};
@@ -38,10 +38,10 @@ impl TTable
             base: HashTable::new(replace_shallow_strategy), 
         }
     }
-    pub fn insert(&mut self, hash: usize, data: TTableNode) {
+    pub fn insert(&mut self, hash: HashT, data: TTableNode) {
         self.base.insert(hash, data)
     }
-    pub fn get(&self, hash: usize) -> Option<&TTableNode> {
+    pub fn get(&self, hash: HashT) -> Option<&TTableNode> {
         self.base.get(hash)
     }
 }

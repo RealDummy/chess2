@@ -118,7 +118,7 @@ fn main() {
     let mut user = game.active_player();
     loop {
         if game.active_player() != user {
-            let best = game.find_best_move(Duration::from_millis(10));
+            let best = game.find_best_move(Duration::from_secs(1));
             let res = game.try_move(&best);
             game.show();
             if let None = print_move_result(game.active_player(), &res) {

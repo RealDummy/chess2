@@ -232,8 +232,8 @@ impl Board {
                 'k' => {black_castle_rights.lose(CastleRights::KingSide);},
                 'Q' => {white_castle_rights.lose(CastleRights::QueenSide);},
                 'K' => {white_castle_rights.lose(CastleRights::KingSide);},
-                _ => {
-                    error = true
+                c => {
+                    error = c != '-'
                 },
             }
             false
@@ -747,7 +747,7 @@ impl Board {
                             from: piece.square,
                             to: square,
                             move_type: match promote {
-                                None => MoveType::Quiet,
+                                None => if let Piece::Pawn = piece.piece {MoveType::PawnPush} else {MoveType::Quiet},
                                 Some(p) => MoveType::Promotion(p),
                             },
                         })
@@ -945,7 +945,7 @@ impl Board {
                 });
 
             }
-            MoveType::Quiet => {
+            MoveType::Quiet | MoveType::PawnPush => {
                 self.hash ^= hasher.get_piece(&SpecefiedPiece {
                     player: self.active,
                     piece: piece,
@@ -1165,6 +1165,20 @@ impl Board {
     pub fn update_hash(mut self, hasher: &GameHasher) -> Self {
         self.hash = self.new_hash(hasher);
         self
+    }
+}
+
+impl PartialEq for &Board {
+    fn eq(&self, rhs: &Self) -> bool {
+        if self.get_hash() != rhs.get_hash() {
+            return false;
+        }
+        for (me, them) in self.pieces.iter().flatten().zip(rhs.pieces.iter().flatten()) {
+            if me != them {
+                return false;
+            }
+        }
+        true
     }
 }
 

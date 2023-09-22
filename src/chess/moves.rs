@@ -2,6 +2,7 @@ use crate::chess::piece::Piece;
 
 #[derive(Debug, Clone)]
 pub enum MoveType {
+    PawnPush,
     Quiet,
     Capture(Piece),
     EnPassent,

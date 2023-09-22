@@ -16,7 +16,7 @@ use generator::{
 use board::Board;
 use moves::Move;
 use hash::GameHasher;
-use self::{board::{MoveType, EvalT, Evaluation, MoveSquares}, piece::Piece};
+use self::{board::{MoveType, EvalT, Evaluation, MoveSquares, HashT}, piece::Piece};
 use transpositition::{TTable, TTableNode, Score};
 
 use std::time::{Duration, Instant};
@@ -28,6 +28,8 @@ pub struct Game {
     last_move: Option<Move>,
     hasher: GameHasher,
     table: TTable,
+    history: Vec<Board>,
+    
 }
 
 pub enum MoveResult {
@@ -48,6 +50,7 @@ impl Game {
             last_move: None,
             hasher,
             table: TTable::new(),
+            history: Vec::new(),
         }
     }
     pub fn from_fen(fen: &str) -> Result<Self, &'static str> {
@@ -59,6 +62,7 @@ impl Game {
             last_move: None,
             hasher,
             table: TTable::new(),
+            history: Vec::new(),
         })
     }
     pub fn fen(&self) -> String {
@@ -75,8 +79,31 @@ impl Game {
     }
 
     fn make_move(&mut self, m: &Move) {
+        self.history.push(self.board.clone());
         self.board.make_move(m, &self.hasher);
         self.last_move = Some(m.clone());   
+    }
+    fn is_probable_repetition(board: &Board, history: &Vec<HashT>) -> bool {
+        let pos_count = history.iter().fold(0, |a,&e| {
+            if e == board.get_hash() {
+                a + 1
+            }
+            else {
+                a
+            }
+        }); 
+        pos_count >= 2
+    }
+    fn is_repetition(&self) -> bool {
+        let pos_count = self.history.iter().fold(0, |a,e| {
+            if e == &self.board {
+                a + 1
+            }
+            else {
+                a
+            }
+        });
+        pos_count >= 2
     }
     pub fn read_uci(&self, uci: &str) -> Result<MoveSquares, String>{
         match input::read_uci(uci) {
@@ -114,6 +141,15 @@ impl Game {
                 return MoveResult::InvalidMove;
             }
         };
+        match &m.move_type {
+            MoveType::Capture(_) |
+            MoveType::CaptureAndPromotion(_, _) |
+            MoveType::PawnPush |
+            MoveType::EnPassent => {
+                self.history.clear();
+            }
+            _ => ()
+        };
         self.make_move(&m);
         //let next_moves = self.board.generate_legal(&self.gen, &self.slide);
         let res = match self.get_legal_moves().len() {
@@ -121,7 +157,10 @@ impl Game {
                 false => MoveResult::Draw,
                 true  => MoveResult::Win,
             }
-            _ => MoveResult::NextTurn,
+            _ => match self.is_repetition() {
+                true => MoveResult::Draw,
+                false => MoveResult::NextTurn,
+            }
         };
         res
     }
@@ -155,7 +194,7 @@ impl Game {
         if depth > 3 {
             return Evaluation::Value(standing_eval);
         }
-        if alpha < standing_eval {
+        if standing_eval > alpha {
             alpha = standing_eval;
         }
         for capture in board.generate_legal_captures(&self.gen, &self.slide) {
@@ -184,7 +223,7 @@ impl Game {
         Evaluation::Value(alpha)
     }
 
-    fn search_best(&mut self, board: &mut Board, mut alpha: EvalT, mut beta: EvalT, depth: u8, max_depth: u8) -> (Option<Move>, Evaluation) {
+    fn search_best(&mut self, board: &mut Board, mut alpha: EvalT, mut beta: EvalT, depth: u8, max_depth: u8, history: &mut Vec<HashT>) -> (Option<Move>, Evaluation) {
         let node = self.table.get(board.get_hash());
         if let Some(data) = node {
             if max_depth - depth <= data.ply {
@@ -226,17 +265,25 @@ impl Game {
         for m in legal_moves {
             let mut b2 = board.clone();
             b2.make_move(&m, &self.hasher);
-            let (best, inverse_score) = self.search_best(&mut b2, -beta, -alpha, depth + 1, max_depth);
+            history.push(b2.get_hash());
+            let (best, inverse_score) = self.search_best(&mut b2, -beta, -alpha, depth + 1, max_depth, history);
+            history.pop();
             
-            let score = match inverse_score {
-                Evaluation::MateWin(t) => Evaluation::MateLoss(t+1),
-                Evaluation::MateLoss(t) => Evaluation::MateWin(t+1),
-                Evaluation::Value(v) => Evaluation::Value(-v),
-                Evaluation::Draw => Evaluation::Draw,
-            };
+            let score = (|| {
+                    if Game::is_probable_repetition(&b2, history) {
+                        return Evaluation::Draw;
+                    }
+                    match inverse_score {
+                        Evaluation::MateWin(t) => Evaluation::MateLoss(t+1),
+                        Evaluation::MateLoss(t) => Evaluation::MateWin(t+1),
+                        Evaluation::Value(v) => Evaluation::Value(-v),
+                        Evaluation::Draw => Evaluation::Draw,
+                }
+            })();
+
             let score = match score {
-                Evaluation::MateWin(_) => {
-                    return (Some(m), score)
+                Evaluation::MateWin(d) => {
+                    EvalT::MAX - (d as i16)
                 },
                 Evaluation::MateLoss(_) => {
                     self.table.insert(  b2.get_hash(), TTableNode {ply: max_depth - depth - 1, eval: Score::UpperBound(beta), best, is_odd});
@@ -250,7 +297,6 @@ impl Game {
                 return (None, Evaluation::Value(beta));
             }
             else if score > alpha {
-                //self.table.insert(b2.get_hash(), TTableNode { ply: max_depth - depth - 1, eval: Score::Exact(score), best, is_odd});
                 alpha = score;
                 best_move = Some(m);
             }
@@ -266,8 +312,9 @@ impl Game {
         let start = Instant::now();
         let mut depth = 2;
         let mut best = None;
+        let mut history = self.history.iter().map(|e| e.get_hash()).collect();
         loop  {
-            let (m, a) = self.search_best(&mut self.board.clone(), EvalT::MIN + 1, EvalT::MAX, 0, depth);
+            let (m, a) = self.search_best(&mut self.board.clone(), EvalT::MIN + 1, EvalT::MAX, 0, depth, &mut history);
             best = match m {
                 None => best,
                 s => s,
