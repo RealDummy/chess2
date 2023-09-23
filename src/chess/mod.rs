@@ -308,7 +308,7 @@ impl Game {
         (best_move, Evaluation::Value(alpha))
     }
     
-    pub fn find_best_move(&mut self, min_duration: Duration) -> MoveSquares {
+    pub fn find_best_move_timed(&mut self, min_duration: Duration) -> MoveSquares {
         let start = Instant::now();
         let mut depth = 2;
         let mut best = None;
@@ -336,6 +336,35 @@ impl Game {
             },
             None => panic!("no moves found!"),
         }
+    }
+    pub fn find_best_move_depth(&mut self, start_depth: u8, max_depth: u8) -> MoveSquares {
+        assert!(start_depth < max_depth);
+        let mut depth = start_depth;
+        let mut best = None;
+        let mut history = self.history.iter().map(|e| e.get_hash()).collect();
+        while depth < max_depth  {
+            let (m, a) = self.search_best(&mut self.board.clone(), EvalT::MIN + 1, EvalT::MAX, 0, depth, &mut history);
+            best = match m {
+                None => best,
+                s => s,
+            };
+            depth += 1;
+        }
+        match best {
+            Some(best) => MoveSquares {
+                to: best.to,
+                from: best.from,
+                promote: match best.move_type {
+                    MoveType::CaptureAndPromotion(_, p) => Some(p),
+                    MoveType::Promotion(p) => Some(p),
+                    _ => None,
+                }
+            },
+            None => panic!("no moves found!"),
+        }
+    }
+    pub fn clear_data(&mut self) {
+        self.table.clear()
     }
     pub fn show(&self) {
         let square = match &self.last_move {

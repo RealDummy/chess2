@@ -1,5 +1,5 @@
 mod chess;
-use std::{env, time::Duration};
+use std::{env, time::{Duration, Instant}};
 use chess::MoveResult;
 use log4rs;
 use std::io;
@@ -14,6 +14,7 @@ enum Command {
     Reset,
     Help,
     Switch,
+    Bench(u8),
 }
 
 fn get_user_input() -> Option<String> {
@@ -69,6 +70,15 @@ fn transform_input(input: String) -> Result<Command, String> {
         "switch" => {
             Ok(Command::Switch)
         }
+        "bench" => {
+            let depth = match u8::from_str_radix(&args, 10) {
+                Ok(d) => d,
+                Err(_) => { 
+                    return Err("invalid depth".to_owned()); 
+                }
+            };
+            Ok(Command::Bench(depth))
+        }
         _ => {
             Ok(Command::Move(command))
         }
@@ -118,7 +128,7 @@ fn main() {
     let mut user = game.active_player();
     loop {
         if game.active_player() != user {
-            let best = game.find_best_move(Duration::from_secs(1));
+            let best = game.find_best_move_timed(Duration::from_secs(1));
             let res = game.try_move(&best);
             game.show();
             if let None = print_move_result(game.active_player(), &res) {
@@ -180,6 +190,19 @@ fn main() {
             }
             Command::Exit => {
                 break;
+            }
+            Command::Bench(depth) => {
+                let iterations = 10;
+                let mut time = Duration::new(0, 0);
+                let mut best = None;
+                for _ in 0..iterations {
+                    game.clear_data();
+                    let begin = Instant::now();
+                    best = Some(game.find_best_move_depth(2, depth));
+                    let end = Instant::now();
+                    time += end - begin;
+                }
+                println!("move {:?} found in about {}ms", best.unwrap(), (time / iterations).as_millis());
             }
         }
     }

@@ -117,14 +117,13 @@ struct MoveGenCache {
 
 #[derive(Clone)]
 pub struct Board {
-    active: Player,
     pieces: [[Set;6]; 2],
-    half_move: u32,
+    half_move: u16,
     en_passant_target: Option<u8>,
-    last_irreversable: u32,
-    cache: Option<MoveGenCache>,
+    last_irreversable: u16,
     lost_castle_rights: [LostCastleRights; 2],
-    hash: HashT
+    hash: HashT,
+    active: Player,
 }
 
 impl Hash for Board {
@@ -152,7 +151,6 @@ impl Board {
             half_move: 1,
             en_passant_target: None,
             last_irreversable: 0,
-            cache: None,
             lost_castle_rights: [LostCastleRights(CastleRights::None), LostCastleRights(CastleRights::None)],
             hash: 0
         }.update_hash(hasher)
@@ -165,7 +163,6 @@ impl Board {
             half_move: 0,
             en_passant_target: None,
             last_irreversable: 0,
-            cache: None,
             lost_castle_rights: [LostCastleRights(CastleRights::Both), LostCastleRights(CastleRights::Both)],
             hash: 0,
         }.update_hash(hasher)
@@ -256,10 +253,10 @@ impl Board {
         //chiter.any(|c| c == ' ');
         
         let last_irreversable: String = chiter.by_ref().take_while(|c| c.is_ascii_digit()).collect();
-        let last_irreversable: u32 = last_irreversable.parse().ok().unwrap_or_else(|| {error = true; 0});
+        let last_irreversable: u16 = last_irreversable.parse().ok().unwrap_or_else(|| {error = true; 0});
         
         let move_count: String = chiter.by_ref().take_while(|d| d.is_ascii_digit()).collect();
-        let half_move: u32 = move_count.parse().ok().unwrap_or_else(|| {error = true; 1}) * 2 + active.index() as u32;
+        let half_move: u16 = move_count.parse().ok().unwrap_or_else(|| {error = true; 1}) * 2 + active.index() as u16;
         if error {
             return Err("invalid fen");
         }
@@ -269,7 +266,6 @@ impl Board {
             en_passant_target: ept,
             half_move,
             last_irreversable,
-            cache: None,
             lost_castle_rights: [white_castle_rights, black_castle_rights],
             hash: 0,
         }.update_hash(hasher))
@@ -456,7 +452,7 @@ impl Board {
             bit_set::intersect(slide.get(attacker, square), all_pieces) == 0
         })
     } 
-    fn create_cache(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) {
+    fn create_cache(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> MoveGenCache {
         let opponent = self.active.invert(); 
         ////info!("current player: {:?}", self.active);
         let friends = self.pieces[self.active.index()].iter()
@@ -484,21 +480,21 @@ impl Board {
                 bit_set::set(&mut pinners, attacker);
             }
         }
-        self.cache = Some(MoveGenCache {
+        MoveGenCache {
             friends,
             enemies,
             all_pieces,
             pinned,
             pinners,
             check
-        });
+        }
     }
 
     fn king_pos(&self, player: Player) -> u8 {
         bit_set::lsb_pos(self.get_set(player, Piece::King))
     }
 
-    fn check_en_passant(&self, slide: &SliderMasks, candidate: MoveSquares) -> bool {
+    fn check_en_passant(&self, slide: &SliderMasks, candidate: MoveSquares, cache: &MoveGenCache) -> bool {
         let enemy_pawn = adjust_square(candidate.to, 0, match self.active {
             Player::White => 1,
             Player::Black => -1,
@@ -508,10 +504,10 @@ impl Board {
         }
         let king_pos = self.king_pos(self.active);
         //check for checks
-        let checks = self.cache.as_ref().unwrap().check;
+        let checks = cache.check;
         let target_check = bit_set::intersect(checks, bit_set::from_idx(enemy_pawn));
 
-        if bit_set::intersect(bit_set::from_idx(candidate.from), self.cache.as_ref().unwrap().pinned) != 0 {
+        if bit_set::intersect(bit_set::from_idx(candidate.from), cache.pinned) != 0 {
             return false;
         }
 
@@ -528,7 +524,7 @@ impl Board {
             });
             let rank_mask = 0xFFu64 << 8 * rank(enemy_pawn);
             let problems = bit_set::intersect(rank_mask, rnq);
-            let blockers = [enemy_pawn, candidate.from].iter().fold(self.cache.as_ref().unwrap().all_pieces, |a, &x| {
+            let blockers = [enemy_pawn, candidate.from].iter().fold(cache.all_pieces, |a, &x| {
                 bit_set::difference(bit_set::from_idx(x), a)
             });
             let pinned = bit_set::iter_pos(problems).any(|x| {
@@ -540,8 +536,8 @@ impl Board {
         }
         true
     }
-    fn check_castle(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks, side: &CastleType) -> bool {
-        let check = self.cache.as_ref().unwrap().check;
+    fn check_castle(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks, side: &CastleType, cache: &MoveGenCache) -> bool {
+        let check = cache.check;
         if check != 0 {
             return false;
         }
@@ -575,7 +571,7 @@ impl Board {
         }
         let king_pos = self.king_pos(self.active);
         let between = slide.get(king_pos, rook_pos);
-        let all_pieces = self.cache.as_ref().unwrap().all_pieces;
+        let all_pieces = cache.all_pieces;
         if bit_set::intersect(all_pieces, between) != 0 {
             return false;
         }
@@ -588,15 +584,7 @@ impl Board {
         
     }
 
-    fn check_move_unchecked(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks, candidate: MoveSquares) -> bool {
-        let MoveGenCache{
-            friends,
-            all_pieces,
-            pinned,
-            pinners,
-            check,
-            ..
-        } = self.cache.as_ref().unwrap().clone();
+    fn check_move_unchecked(&self, gen: &PossibleMoveGenerator, slide: &SliderMasks, candidate: MoveSquares, cache: &MoveGenCache) -> bool {
         let square = candidate.from;
         let ss = bit_set::from_idx(square);
         let new_square = candidate.to;
@@ -608,19 +596,19 @@ impl Board {
                 return false;
             }
         };
-        if bit_set::intersect(friends, nss) != 0 {
+        if bit_set::intersect(cache.friends, nss) != 0 {
             //info!("move {} rejected: lands on friend", self.fmv(square, new_square, None));
             return false;
         }
         let s = slide.get(square, new_square);
-        let slide_blockers = bit_set::intersect(s, all_pieces);
+        let slide_blockers = bit_set::intersect(s, cache.all_pieces);
         if slide_blockers != 0 {
             //info!("move {} rejected: slide blocked", self.fmv(square, new_square, None));
             return false;
         }
         let king_pos = bit_set::lsb_pos(self.get_set(self.active, Piece::King));
-        if bit_set::intersect(ss, pinned) != 0 { //if piece is pinned
-            if bit_set::iter_pos(pinners).any(|pinner|{ //for each pinner, check if any
+        if bit_set::intersect(ss, cache.pinned) != 0 { //if piece is pinned
+            if bit_set::iter_pos(cache.pinners).any(|pinner|{ //for each pinner, check if any
                 bit_set::intersect( //new move doesnt intersect with pinner attack
                     bit_set::union(
                         bit_set::from_idx(pinner), 
@@ -642,7 +630,7 @@ impl Board {
                 let new_attackers = self.get_square_attackers(new_square, gen);
                 let is_attacked = bit_set::iter_pos(new_attackers).any(|attacker_pos|{
                     let attack = slide.get(new_square, attacker_pos);
-                    let blockers = bit_set::intersect(bit_set::difference(bit_set::from_idx(square), all_pieces), attack);
+                    let blockers = bit_set::intersect(bit_set::difference(bit_set::from_idx(square), cache.all_pieces), attack);
                     bit_set::count(blockers) == 0
                 });
                 if is_attacked {
@@ -651,8 +639,8 @@ impl Board {
                 }
             }
             _ => {
-                if bit_set::count(check) != 0 {
-                    let resolved_checks = bit_set::iter_pos(check).all(|check_pos| {
+                if bit_set::count(cache.check) != 0 {
+                    let resolved_checks = bit_set::iter_pos(cache.check).all(|check_pos| {
                         let attack = slide.get(king_pos, check_pos);
                         let block = bit_set::intersect(attack, nss);
                         let capture = bit_set::intersect(nss, bit_set::from_idx(check_pos));
@@ -723,9 +711,9 @@ impl Board {
     pub fn generate_legal(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
         ////info!("---starting generation for half move {}----", self.half_move);
         let mut res: Vec<Move> = Vec::new();
-        self.create_cache(gen, slide);
-        let enemies = self.cache.as_ref().unwrap().enemies;
-        let friends = self.cache.as_ref().unwrap().friends;
+        let cache = self.create_cache(gen, slide);
+        let enemies = cache.enemies;
+        let friends = cache.friends;
         for piece in self.iter_pieces(self.active) {
 
             let possible_moves = bit_set::difference(friends, gen.get_moves(&piece));
@@ -742,7 +730,7 @@ impl Board {
                         promote,
                     };
                     
-                    if self.check_move_unchecked(gen, slide, candidate) {
+                    if self.check_move_unchecked(gen, slide, candidate, &cache) {
                         res.push(Move {
                             from: piece.square,
                             to: square,
@@ -760,7 +748,7 @@ impl Board {
                         to: square,
                         promote,
                     };
-                    if self.check_move_unchecked(gen, slide, candidate) {
+                    if self.check_move_unchecked(gen, slide, candidate, &cache) {
                         res.push(Move {
                             from: piece.square,
                             to: square,
@@ -792,7 +780,7 @@ impl Board {
                         to: ept,
                         from: square,
                         promote,
-                    }) {
+                    }, &cache) {
                         res.push(Move {
                             to: ept,
                             from: square,
@@ -804,7 +792,7 @@ impl Board {
             }
         }
         self.lost_castle_rights[self.active.index()].get_rights().iter().for_each(|side| {
-            if self.check_castle(gen, slide, side) {
+            if self.check_castle(gen, slide, side, &cache) {
                 res.push(Move {
                     from: self.king_pos(self.active),
                     to: Self::get_castle_square(self.active, side),
@@ -816,8 +804,8 @@ impl Board {
     }
     pub fn generate_legal_captures(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
         let mut res: Vec<Move> = Vec::new();
-        self.create_cache(gen, slide);
-        let enemies = self.cache.as_ref().unwrap().enemies;
+        let cache = self.create_cache(gen, slide);
+        let enemies = cache.enemies;
         for piece in self.iter_pieces(self.active) {
 
             let possible_captures = gen.get_attacks(&piece);
@@ -830,7 +818,7 @@ impl Board {
                         to: square,
                         promote,
                     };
-                    if self.check_move_unchecked(gen, slide, candidate) {
+                    if self.check_move_unchecked(gen, slide, candidate, &cache) {
                         res.push(Move {
                             from: piece.square,
                             to: square,
@@ -861,7 +849,7 @@ impl Board {
                         to: ept,
                         from: square,
                         promote,
-                    }) {
+                    }, &cache) {
                         res.push(Move {
                             to: ept,
                             from: square,
@@ -1128,21 +1116,11 @@ impl Board {
         };
         res
     }
+    fn in_check_cached(cache: &MoveGenCache) -> bool{
+        cache.check != 0
+    }
     pub fn in_check(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> bool {
-        match &self.cache {
-            None => {
-                self.create_cache(gen, slide);
-                if let Some(cache) = self.cache.as_ref() {
-                    cache.check != 0
-                }
-                else { //unreachable code
-                    false
-                }
-            },
-            Some(cache) => {
-                cache.check != 0
-            }
-        }
+        self.create_cache(gen, slide).check != 0
     }
 
     fn new_hash(&self, hasher: &GameHasher) -> HashT {

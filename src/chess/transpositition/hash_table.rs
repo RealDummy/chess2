@@ -80,6 +80,9 @@ where
     pub fn load(&self) -> f64 {
         return self.load as f64 / self.table.len() as f64
     }
+    pub fn clear(&mut self) {
+        self.table.fill(None);
+    }
 }
 
 #[cfg(test)]

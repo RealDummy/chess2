@@ -44,4 +44,7 @@ impl TTable
     pub fn get(&self, hash: HashT) -> Option<&TTableNode> {
         self.base.get(hash)
     }
+    pub fn clear(&mut self) {
+        self.base.clear();
+    }
 }
