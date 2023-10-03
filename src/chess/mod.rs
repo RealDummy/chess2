@@ -16,7 +16,7 @@ use generator::{
 use board::Board;
 use moves::Move;
 use hash::GameHasher;
-use self::{board::{MoveType, EvalT, Evaluation, MoveSquares, HashT}, piece::Piece};
+use self::{board::{MoveType, EvalT, Evaluation, MoveSquares, HashT, MoveGenCache}, piece::Piece};
 use transpositition::{TTable, TTableNode, Score};
 
 use std::time::{Duration, Instant};
@@ -29,6 +29,7 @@ pub struct Game {
     hasher: GameHasher,
     table: TTable,
     history: Vec<Board>,
+    legal_moves: Option<Vec<Move>>
     
 }
 
@@ -51,6 +52,7 @@ impl Game {
             hasher,
             table: TTable::new(),
             history: Vec::new(),
+            legal_moves: None,
         }
     }
     pub fn from_fen(fen: &str) -> Result<Self, &'static str> {
@@ -63,22 +65,26 @@ impl Game {
             hasher,
             table: TTable::new(),
             history: Vec::new(),
+            legal_moves: None,
         })
     }
     pub fn fen(&self) -> String {
         self.board.to_fen()
     }
-    pub fn perft(&self, n: u32) -> u64 {
+    pub fn perft(&mut self, n: u32) -> u64 {
         let res = self.board.perft(n, &self.gen, &self.slide, &self.hasher);
         println!("Nodes searched: {res}");
         res
     }
 
-    fn get_legal_moves<'a>(&'a mut self) -> Vec<Move> {
-        self.board.generate_legal(&self.gen, &self.slide)
+    fn get_legal_moves<'a>(&'a mut self, cache: &MoveGenCache) -> &'a Vec<Move> {
+        self.legal_moves.get_or_insert_with(|| {
+            self.board.generate_legal(&self.gen, &self.slide, cache)
+        })
     }
 
     fn make_move(&mut self, m: &Move) {
+        self.legal_moves = None;
         self.history.push(self.board.clone());
         self.board.make_move(m, &self.hasher);
         self.last_move = Some(m.clone());   
@@ -114,8 +120,8 @@ impl Game {
         }
     }
     pub fn try_move(&mut self, try_move: &MoveSquares) -> MoveResult {
-        
-        let valid_moves = self.get_legal_moves();
+        let cache = self.board.create_cache(&self.gen, &self.slide);
+        let valid_moves = self.get_legal_moves(&cache);
         let found = valid_moves.iter().find(|&m| {
             m.to == try_move.to && 
             m.from == try_move.from &&
@@ -151,9 +157,9 @@ impl Game {
             _ => ()
         };
         self.make_move(&m);
-        //let next_moves = self.board.generate_legal(&self.gen, &self.slide);
-        let res = match self.get_legal_moves().len() {
-            0 => match self.board.in_check(&self.gen, &self.slide) {
+        let cache = self.board.create_cache(&self.gen, &self.slide);
+        let res = match self.get_legal_moves(&cache).len() {
+            0 => match self.board.in_check(&cache) {
                 false => MoveResult::Draw,
                 true  => MoveResult::Win,
             }
@@ -197,7 +203,8 @@ impl Game {
         if standing_eval > alpha {
             alpha = standing_eval;
         }
-        for capture in board.generate_legal_captures(&self.gen, &self.slide) {
+        let cache = board.create_cache(&self.gen, &self.slide);
+        for capture in board.generate_legal_captures(&self.gen, &self.slide, &cache) {
             let mut b2 = board.clone();
             b2.make_move(&capture, &self.hasher);
             let inverse_eval = self.quiesce(&mut b2, -beta, -alpha, depth + 1);
@@ -255,9 +262,10 @@ impl Game {
             _ => false,
         };
         let mut best_move = None;
-        let legal_moves = board.generate_legal(&self.gen, &self.slide);
+        let cache = board.create_cache(&self.gen, &self.slide);
+        let legal_moves = board.generate_legal(&self.gen, &self.slide, &cache);
         if legal_moves.is_empty() {
-            return match board.in_check(&self.gen, &self.slide) {
+            return match board.in_check(&cache) {
                 true => (None, Evaluation::MateLoss(0)),
                 false => (None, Evaluation::Draw)
             }

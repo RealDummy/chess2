@@ -1,7 +1,7 @@
 use crate::chess::{Player, Piece, EvalT};
 
 // data from https://github.com/healeycodes/andoma/blob/main/evaluate.py
-const OPENENINGS: [[[EvalT; 64]; 6]; 2] = [[
+const OPENENINGS: [[[i8; 64]; 6]; 2] = [[
     [
         0,  0,  0,  0,  0,  0,  0,  0,
         5, 10, 10, -20, -20, 10, 10,  5,
@@ -79,5 +79,5 @@ const OPENENINGS: [[[EvalT; 64]; 6]; 2] = [[
 
 pub fn eval_piece(player: Player, piece: Piece, position: u8) -> EvalT {
     let piece_value = [100, 300, 300, 500, 900, 20000];
-    piece_value[piece.index()] + OPENENINGS[player.index()][piece.index()][position as usize]
+    piece_value[piece.index()] + OPENENINGS[player.index()][piece.index()][position as usize] as EvalT
 }

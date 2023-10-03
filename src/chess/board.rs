@@ -106,7 +106,7 @@ impl LostCastleRights {
 
 //things to add: king pos
 #[derive(Clone)]
-struct MoveGenCache {
+pub struct MoveGenCache {
     pub friends: Set,
     pub enemies: Set,
     pub all_pieces: Set,
@@ -452,7 +452,7 @@ impl Board {
             bit_set::intersect(slide.get(attacker, square), all_pieces) == 0
         })
     } 
-    fn create_cache(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> MoveGenCache {
+    pub fn create_cache(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> MoveGenCache {
         let opponent = self.active.invert(); 
         ////info!("current player: {:?}", self.active);
         let friends = self.pieces[self.active.index()].iter()
@@ -708,10 +708,9 @@ impl Board {
         self.active
     }
 
-    pub fn generate_legal(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
+    pub fn generate_legal(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks, cache: &MoveGenCache) -> Vec<Move> {
         ////info!("---starting generation for half move {}----", self.half_move);
         let mut res: Vec<Move> = Vec::new();
-        let cache = self.create_cache(gen, slide);
         let enemies = cache.enemies;
         let friends = cache.friends;
         for piece in self.iter_pieces(self.active) {
@@ -802,9 +801,8 @@ impl Board {
         });
         res
     }
-    pub fn generate_legal_captures(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> Vec<Move> {
+    pub fn generate_legal_captures(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks, cache: &MoveGenCache) -> Vec<Move> {
         let mut res: Vec<Move> = Vec::new();
-        let cache = self.create_cache(gen, slide);
         let enemies = cache.enemies;
         for piece in self.iter_pieces(self.active) {
 
@@ -1091,7 +1089,8 @@ impl Board {
             return 1;
         }
         let mut res = 0;
-        let moves = self.generate_legal(gen, slide);
+        let cache = self.create_cache(gen, slide);
+        let moves = self.generate_legal(gen, slide, &cache);
         for m in &moves {
             let mut b = self.clone();
             b.make_move(m, hasher);
@@ -1100,13 +1099,14 @@ impl Board {
         res
     }
 
-    pub fn perft(&self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks, hasher: &GameHasher) -> u64 {
+    pub fn perft(&mut self, n:u32, gen: &PossibleMoveGenerator, slide: &SliderMasks, hasher: &GameHasher) -> u64 {
         if n == 0 {
             return 1;
         }
         let mut res = 0;
         let mut copy = self.clone();
-        let moves = copy.generate_legal(gen, slide);
+        let cache = self.create_cache(gen, slide);
+        let moves = copy.generate_legal(gen, slide, &cache);
         for m in &moves {
             let mut b = copy.clone();
             b.make_move(m, hasher);
@@ -1116,11 +1116,8 @@ impl Board {
         };
         res
     }
-    fn in_check_cached(cache: &MoveGenCache) -> bool{
+    pub fn in_check(&self, cache: &MoveGenCache) -> bool {
         cache.check != 0
-    }
-    pub fn in_check(&mut self, gen: &PossibleMoveGenerator, slide: &SliderMasks) -> bool {
-        self.create_cache(gen, slide).check != 0
     }
 
     fn new_hash(&self, hasher: &GameHasher) -> HashT {
@@ -1247,7 +1244,7 @@ mod test {
         let slide = SliderMasks::new();
         let hasher = super::GameHasher::new();
         for (fen, nodes) in positions.iter().zip(nodes_4) {
-            let b = Board::from_fen(fen, &hasher).unwrap();
+            let mut b = Board::from_fen(fen, &hasher).unwrap();
             assert!(b.perft(depth, &gen, &slide, &hasher) == nodes);
         }
     }
